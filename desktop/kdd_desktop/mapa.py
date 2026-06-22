@@ -221,6 +221,7 @@ class MapaView(QGraphicsView):
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.viewport().setCursor(Qt.CursorShape.OpenHandCursor)
         self._conectar = False
+        self._selecionar = False
         self._origem_tmp: ConceitoNode | None = None
         self._linha_tmp: QGraphicsLineItem | None = None
         self._pan = False
@@ -228,8 +229,21 @@ class MapaView(QGraphicsView):
 
     def set_modo_conectar(self, on: bool) -> None:
         self._conectar = on
+        if on:
+            self._selecionar = False
+        self.setDragMode(QGraphicsView.DragMode.NoDrag)
         self.viewport().setCursor(
             Qt.CursorShape.CrossCursor if on else Qt.CursorShape.OpenHandCursor)
+
+    def set_modo_selecionar(self, on: bool) -> None:
+        self._selecionar = on
+        if on:
+            self._conectar = False
+        # laço: arrastar no vazio seleciona vários; senão NoDrag (pan no vazio)
+        self.setDragMode(
+            QGraphicsView.DragMode.RubberBandDrag if on else QGraphicsView.DragMode.NoDrag)
+        self.viewport().setCursor(
+            Qt.CursorShape.ArrowCursor if on else Qt.CursorShape.OpenHandCursor)
 
     def wheelEvent(self, ev) -> None:  # noqa: ANN001
         fator = 1.15 if ev.angleDelta().y() > 0 else 1 / 1.15
@@ -250,7 +264,7 @@ class MapaView(QGraphicsView):
                 self._linha_tmp = self.scene().addLine(
                     p.x(), p.y(), p.x(), p.y(), QPen(QColor("#dc2626"), 2, Qt.PenStyle.DashLine))
                 return
-            if not self._conectar and no is None:
+            if not self._conectar and not self._selecionar and no is None:
                 # arrastar o vazio = mover o mapa (pan)
                 self._pan = True
                 self._pan_ini = ev.pos()
@@ -364,10 +378,16 @@ class MapaDialog(QDialog):
         self.cb_alvo.hide()
         barra.addWidget(self.cb_alvo)
 
+        self._b_selecionar = QPushButton("⬚ Selecionar")
+        self._b_selecionar.setCheckable(True)
+        self._b_selecionar.setToolTip("Arrastar no vazio seleciona vários; depois arraste o grupo.")
+        self._b_selecionar.toggled.connect(self._toggle_selecionar)
+        barra.addWidget(self._b_selecionar)
+
         self._b_conectar = QPushButton("🔗 Conectar")
         self._b_conectar.setCheckable(True)
         self._b_conectar.setEnabled(self.pode_editar)
-        self._b_conectar.toggled.connect(self.view.set_modo_conectar)
+        self._b_conectar.toggled.connect(self._toggle_conectar)
         barra.addWidget(self._b_conectar)
 
         if self.pode_editar:
@@ -383,6 +403,20 @@ class MapaDialog(QDialog):
         b_at.clicked.connect(self._recarregar)
         barra.addWidget(b_at)
         layout.addLayout(barra)
+
+    def _toggle_conectar(self, on: bool) -> None:
+        if on and self._b_selecionar.isChecked():
+            self._b_selecionar.blockSignals(True)
+            self._b_selecionar.setChecked(False)
+            self._b_selecionar.blockSignals(False)
+        self.view.set_modo_conectar(on)
+
+    def _toggle_selecionar(self, on: bool) -> None:
+        if on and self._b_conectar.isChecked():
+            self._b_conectar.blockSignals(True)
+            self._b_conectar.setChecked(False)
+            self._b_conectar.blockSignals(False)
+        self.view.set_modo_selecionar(on)
 
     def _mudar_escopo(self) -> None:
         self._escopo = self.cb_escopo.currentData()
