@@ -90,6 +90,10 @@ class MainWindow(QMainWindow):
         atualizar.clicked.connect(self._recarregar)
         barra.addWidget(atualizar)
 
+        b_mapa = QPushButton("🗺 Mapa")
+        b_mapa.clicked.connect(self._abrir_mapa)
+        barra.addWidget(b_mapa)
+
         # Ações de edição — só quando há token de validador (perfil de curadoria)
         if self._client.pode_editar():
             barra.addSeparator()
@@ -208,6 +212,14 @@ class MainWindow(QMainWindow):
             return
         self._carregar_areas()
         self.statusBar().showMessage(f"Área '{nome.strip()}' criada.")
+
+    def _abrir_mapa(self) -> None:
+        if not self._conceito_atual:
+            QMessageBox.information(self, "Mapa", "Selecione um conceito primeiro.")
+            return
+        from .mapa import MapaDialog
+        MapaDialog(self._client, self._conceito_atual, self).exec()
+        self._listar_conceitos()
 
     def _abrir_constelacao(self) -> None:
         try:
