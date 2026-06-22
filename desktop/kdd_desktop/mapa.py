@@ -424,6 +424,10 @@ class MapaDialog(QDialog):
         b_exp.setToolTip("Aumenta a área do diagrama para espalhar os conceitos.")
         b_exp.clicked.connect(self._expandir)
         barra.addWidget(b_exp)
+        b_red = QPushButton("⤡ Reduzir")
+        b_red.setToolTip("Encolhe a folha ao conteúdo e enquadra na tela.")
+        b_red.clicked.connect(self._reduzir)
+        barra.addWidget(b_red)
         b_fit = QPushButton("Ajustar")
         b_fit.clicked.connect(self._ajustar)
         barra.addWidget(b_fit)
@@ -586,6 +590,13 @@ class MapaDialog(QDialog):
         dy = max(sr.height() * 0.25, 180.0)
         self.view.scene().setSceneRect(sr.adjusted(-dx, -dy, dx, dy))
         self.view.viewport().update()
+
+    def _reduzir(self) -> None:
+        """Encolhe a folha ao conteúdo atual (recalcula limites) e enquadra."""
+        finais = {cid: (no.scenePos().x(), no.scenePos().y()) for cid, no in self._nodes.items()}
+        self._definir_limites(finais)
+        self.view.viewport().update()
+        self._ajustar()
 
     # ── posições persistidas ──
     def _chave_pos(self) -> str:
