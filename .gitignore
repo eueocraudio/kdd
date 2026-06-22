@@ -17,3 +17,7 @@ api/storage/pdfs/*
 vendor/
 *.log
 .DS_Store
+__pycache__/
+*.pyc
+.venv/
+venv/

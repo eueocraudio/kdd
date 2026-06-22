@@ -1,0 +1,65 @@
+"""Orquestração: para cada fonte pendente, extrai o mapa e empurra para a API."""
+from __future__ import annotations
+
+import logging
+import tempfile
+from pathlib import Path
+from typing import Any
+
+from .api_client import KddClient
+from .config import Config
+from .ia.facade import IAFacade
+from .pdf import extrair_texto
+
+log = logging.getLogger("kdd.bot")
+
+
+class Pipeline:
+    def __init__(self, config: Config, client: KddClient, ia: IAFacade) -> None:
+        self._cfg = config
+        self._client = client
+        self._ia = ia
+
+    def processar_pendentes(self) -> int:
+        pendentes = self._client.listar_pendentes()
+        log.info("fontes pendentes: %d", len(pendentes))
+        ok = 0
+        for fonte in pendentes:
+            if self.processar_fonte(fonte):
+                ok += 1
+        return ok
+
+    def processar_fonte(self, fonte: dict[str, Any]) -> bool:
+        fid = int(fonte["id"])
+        titulo = fonte.get("titulo") or f"fonte {fid}"
+        log.info("[fonte %s] %r — iniciando (backend=%s)", fid, titulo, self._ia.backend_nome)
+        try:
+            self._client.atualizar_status(fid, "processando")
+
+            with tempfile.TemporaryDirectory() as tmp:
+                pdf = self._client.baixar_pdf(fid, Path(tmp) / f"fonte_{fid}.pdf")
+                texto = extrair_texto(pdf, self._cfg.max_chars_pdf)
+
+            if not texto.strip():
+                raise RuntimeError("PDF sem texto extraível (talvez digitalizado/sem OCR).")
+
+            mapa = self._ia.extrair_mapa(titulo, texto)
+            log.info(
+                "[fonte %s] extraído: %d áreas, %d conceitos, %d proposições",
+                fid, len(mapa["areas"]), len(mapa["conceitos"]), len(mapa["proposicoes"]),
+            )
+
+            if mapa["areas"]:
+                self._client.atualizar_status(fid, "processando", areas=mapa["areas"])
+
+            res = self._client.enviar_mapa(fid, mapa["conceitos"], mapa["proposicoes"])
+            log.info("[fonte %s] enviado: %s", fid, res)
+            return True
+
+        except Exception as e:  # noqa: BLE001 — marca a fonte como erro e segue
+            log.exception("[fonte %s] FALHOU: %s", fid, e)
+            try:
+                self._client.atualizar_status(fid, "erro")
+            except Exception:  # noqa: BLE001
+                log.error("[fonte %s] não consegui marcar status=erro", fid)
+            return False

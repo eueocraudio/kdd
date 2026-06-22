@@ -11,9 +11,9 @@
 
 | # | Marco | Entrega central | Depende de |
 |---|-------|-----------------|------------|
-| **1** | **Fundação do Armazém** | Schema MySQL + Web API PHP (CRUD + ingestão + certeza por JOIN) | — |
-| 2 | Cliente PySide (consulta) | Navegar áreas/constelação/mapas (somente leitura) | 1 |
-| 3 | Bot (cérebro) | Fachada Ollama/Claude; 1 PDF → proposições+referências; push p/ API | 1 |
+| **1** ✅ | **Fundação do Armazém** | Schema MySQL + Web API PHP (CRUD + ingestão + certeza por JOIN) | — |
+| 2 🚧 | Cliente PySide (consulta) | Navegar áreas/constelação/mapas (somente leitura) — scaffold pronto | 1 |
+| 3 🚧 | Bot (cérebro) | Fachada Ollama/Claude; 1 PDF → proposições+referências; push p/ API — scaffold pronto | 1 |
 | 4 | Curadoria | Fila de fontes pendentes no PySide; aprovar/reprovar (cascata) | 1, 2, 3 |
 | 5 | Versionamento & refinamentos | Diffs/changesets; desambiguação; pontes interdisciplinares | 1–4 |
 
@@ -247,17 +247,42 @@ GROUP BY p.id;
 
 ---
 
-## Marco 2 — Cliente PySide (consulta) [resumo]
+## Marco 2 — Cliente PySide (consulta) — scaffold pronto (`desktop/`)
 - Conectar na API; **navegar áreas (árvore), conceitos, proposições e a constelação**.
 - Exibir **scores de certeza** junto. Somente leitura nesta fase.
 - Entrega: usuário enxerga o conhecimento já existente no armazém.
 
-## Marco 3 — Bot / cérebro [resumo]
+### Tarefas (checklist)
+- [x] Projeto `desktop/` (PySide6 + requests); `Config.carregar()` lê env e `~/.env`
+  (`KDD_APP_URL`, `KDD_TOKEN`/`_OPERADOR`/`_VALIDADOR`) — sem segredos no código.
+- [x] `KddClient` (sessão requests, header `X-Token`): `saude`, `areas`, `conceitos(q, area)`,
+  `conceito(id)`, `proposicoes(conceito)`, `constelacao`.
+- [x] `MainWindow` (QSplitter: árvore de áreas + busca | tabela de conceitos | detalhe
+  HTML) e `ConstelacaoDialog`. Sintaxe validada.
+- [ ] Execução com GUI real (depende de instalar PySide6) e ajustes de UX.
+
+## Marco 3 — Bot / cérebro — scaffold pronto (`bot/`)
 - **Fachada de IA** (interface comum) com dois back-ends: **Ollama (Qwen 3.5)** e
   **Claude Sonnet 4.6** (API Anthropic).
 - Loop: lista pendentes na API → baixa PDF → extrai conceitos/proposições/áreas →
   desambigua → `POST /fontes/{id}/mapas`.
 - Começa **1 PDF por vez**.
+
+### Tarefas (checklist)
+- [x] Projeto `bot/` (requests + pypdf + anthropic); `Config` lê env/`~/.env`
+  (`KDD_TOKEN_OPERADOR`, `ANTHROPIC_API_KEY`, `KDD_IA_BACKEND`, `KDD_CLAUDE_MODEL`=
+  `claude-sonnet-4-6`, `KDD_OLLAMA_*`, `KDD_MAX_CHARS_PDF`).
+- [x] `KddClient`: `listar_pendentes`, `baixar_pdf`, `atualizar_status`, `enviar_mapa`.
+  Smoke-test em produção: config carrega, auth `X-Token` ok, 0 pendentes.
+- [x] **Fachada de IA** (`IAFacade` + `Backend` Protocol) com seleção `auto`/`claude`/`ollama`.
+  `ClaudeBackend` usa *tool use* com `tool_choice` forçado (`registrar_mapa`) via
+  `messages.stream` + `get_final_message`; `OllamaBackend` usa `format=json`.
+- [x] `schema.py`: `MAPA_SCHEMA`, `SYSTEM` (identidade por **sentido**), `normalizar()`
+  (sentido cai para rótulo quando ausente) — testado.
+- [x] `Pipeline.processar_fonte`: `processando` → baixa PDF → extrai (pypdf) → IA →
+  grava áreas → `POST /mapas`; em falha marca `erro`. Orquestração testada com stubs
+  (sequência: processando → áreas → mapa).
+- [ ] Execução ponta a ponta com IA real (depende de `ANTHROPIC_API_KEY` ou Ollama rodando).
 
 ## Marco 4 — Curadoria [resumo]
 - PySide ganha **fila de fontes processadas pendentes de aprovação**.
