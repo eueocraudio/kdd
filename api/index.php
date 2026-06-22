@@ -68,6 +68,10 @@ if (preg_match('#^/fontes/(\d+)/reprovar$#', $path, $m) && $method === 'POST') {
     fontes_reprovar((int) $m[1]);
 }
 
+if (preg_match('#^/fontes/(\d+)/reprocessar$#', $path, $m) && $method === 'POST') {
+    fontes_reprocessar((int) $m[1]);
+}
+
 // --- Consulta (somente leitura; humanos e máquinas) ---
 if ($method === 'GET' && $path === '/areas') {
     areas_arvore();

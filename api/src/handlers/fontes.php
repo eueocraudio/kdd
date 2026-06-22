@@ -431,6 +431,27 @@ function fontes_aprovar(int $id): void
     json_out(['ok' => true, 'fonte_id' => $id, 'status_aprovacao' => 'aprovada']);
 }
 
+/**
+ * POST /fontes/{id}/reprocessar
+ * Recoloca a fonte na fila (status_proc=pendente) APENAS se ela falhou (erro).
+ * Fontes processadas com sucesso não podem ser reprocessadas.
+ */
+function fontes_reprocessar(int $id): void
+{
+    $pdo = kdd_db();
+    $stmt = $pdo->prepare("SELECT status_proc FROM fonte WHERE id = ?");
+    $stmt->execute([$id]);
+    $f = $stmt->fetch();
+    if (!$f) {
+        json_error('Fonte não encontrada', 404);
+    }
+    if ($f['status_proc'] !== 'erro') {
+        json_error('Só é possível reprocessar uma fonte com status de erro.', 409);
+    }
+    $pdo->prepare("UPDATE fonte SET status_proc = 'pendente' WHERE id = ?")->execute([$id]);
+    json_out(['ok' => true, 'fonte_id' => $id, 'status_proc' => 'pendente']);
+}
+
 /** POST /fontes/{id}/reprovar */
 function fontes_reprovar(int $id): void
 {

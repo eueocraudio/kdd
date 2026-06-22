@@ -156,3 +156,14 @@ class KddClient:
 
     def reprovar_fonte(self, fonte_id: int) -> dict[str, Any]:
         return self._escrita("POST", f"/fontes/{fonte_id}/reprovar")
+
+    def reprocessar_fonte(self, fonte_id: int) -> dict[str, Any]:
+        """Recoloca na fila uma fonte com erro (operador). 409 se não estiver em erro."""
+        try:
+            r = self._s.post(f"{self._cfg.base_url}/fontes/{fonte_id}/reprocessar", timeout=self._timeout)
+        except requests.RequestException as e:
+            raise KddApiError(f"Falha de rede: {e}") from e
+        if r.status_code >= 400:
+            msg = r.json().get("erro") if r.headers.get("content-type", "").startswith("application/json") else r.text
+            raise KddApiError(f"HTTP {r.status_code}: {msg}")
+        return r.json()

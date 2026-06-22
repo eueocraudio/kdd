@@ -657,18 +657,24 @@ class FilaTab(QWidget):
         self.tabela.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.tabela.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.tabela.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.tabela.itemSelectionChanged.connect(self._atualizar_botoes)
         layout.addWidget(self.tabela, 1)
 
+        acoes = QHBoxLayout()
+        acoes.addStretch(1)
+        self.b_repro = QPushButton("↻ Reprocessar")
+        self.b_repro.setToolTip("Recoloca na fila — apenas fontes com erro.")
+        self.b_repro.setEnabled(False)
+        self.b_repro.clicked.connect(self._reprocessar)
+        acoes.addWidget(self.b_repro)
         if self.pode_editar:
-            acoes = QHBoxLayout()
-            acoes.addStretch(1)
             b_ap = QPushButton("Aprovar fonte")
             b_ap.clicked.connect(lambda: self._moderar(True))
             b_rp = QPushButton("Reprovar fonte")
             b_rp.clicked.connect(lambda: self._moderar(False))
             acoes.addWidget(b_ap)
             acoes.addWidget(b_rp)
-            layout.addLayout(acoes)
+        layout.addLayout(acoes)
 
         self._timer = QTimer(self)
         self._timer.setInterval(5000)
@@ -694,7 +700,9 @@ class FilaTab(QWidget):
             cont[proc] = cont.get(proc, 0) + 1
             r = self.tabela.rowCount()
             self.tabela.insertRow(r)
-            self.tabela.setItem(r, 0, QTableWidgetItem(str(f.get("id"))))
+            id_item = QTableWidgetItem(str(f.get("id")))
+            id_item.setData(Qt.ItemDataRole.UserRole, proc)
+            self.tabela.setItem(r, 0, id_item)
             self.tabela.setItem(r, 1, QTableWidgetItem(f.get("titulo") or ""))
             self.tabela.setItem(r, 2, QTableWidgetItem(self._ICON.get(proc, proc)))
             self.tabela.setItem(r, 3, QTableWidgetItem(f.get("status_aprovacao") or ""))
@@ -705,6 +713,7 @@ class FilaTab(QWidget):
             f"{len(fontes)} fonte(s)  ·  ⏳ {cont['pendente']} pendente(s)  ·  "
             f"⚙ {cont['processando']} processando  ·  ✓ {cont['processado']} processado(s)  ·  "
             f"⚠ {cont['erro']} erro(s)")
+        self._atualizar_botoes()
 
     def _sel_id(self) -> int | None:
         r = self.tabela.currentRow()
@@ -712,6 +721,27 @@ class FilaTab(QWidget):
             return None
         it = self.tabela.item(r, 0)
         return int(it.text()) if it else None
+
+    def _atualizar_botoes(self) -> None:
+        r = self.tabela.currentRow()
+        proc = None
+        if r >= 0 and self.tabela.item(r, 0):
+            proc = self.tabela.item(r, 0).data(Qt.ItemDataRole.UserRole)
+        # só fontes com erro podem ser reprocessadas
+        self.b_repro.setEnabled(proc == "erro")
+
+    def _reprocessar(self) -> None:
+        fid = self._sel_id()
+        if fid is None:
+            return
+        try:
+            self._client.reprocessar_fonte(fid)
+        except KddApiError as e:
+            QMessageBox.warning(self, "Erro", str(e))
+            return
+        QMessageBox.information(self, "Reprocessar",
+                                f"Fonte #{fid} voltou para a fila (pendente). O bot vai reprocessá-la.")
+        self._carregar()
 
     def _moderar(self, aprovar: bool) -> None:
         fid = self._sel_id()
