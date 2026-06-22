@@ -217,17 +217,19 @@ class MapaView(QGraphicsView):
         self._dlg = dialog
         self.setScene(QGraphicsScene(self))
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
-        self.setDragMode(QGraphicsView.DragMode.RubberBandDrag)
+        self.setDragMode(QGraphicsView.DragMode.NoDrag)
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
+        self.viewport().setCursor(Qt.CursorShape.OpenHandCursor)
         self._conectar = False
         self._origem_tmp: ConceitoNode | None = None
         self._linha_tmp: QGraphicsLineItem | None = None
+        self._pan = False
+        self._pan_ini = None
 
     def set_modo_conectar(self, on: bool) -> None:
         self._conectar = on
-        self.setDragMode(
-            QGraphicsView.DragMode.NoDrag if on else QGraphicsView.DragMode.RubberBandDrag
-        )
+        self.viewport().setCursor(
+            Qt.CursorShape.CrossCursor if on else Qt.CursorShape.OpenHandCursor)
 
     def wheelEvent(self, ev) -> None:  # noqa: ANN001
         fator = 1.15 if ev.angleDelta().y() > 0 else 1 / 1.15
@@ -240,13 +242,19 @@ class MapaView(QGraphicsView):
         return None
 
     def mousePressEvent(self, ev) -> None:  # noqa: ANN001
-        if self._conectar and ev.button() == Qt.MouseButton.LeftButton:
+        if ev.button() == Qt.MouseButton.LeftButton:
             no = self._no_em(ev.pos())
-            if no:
+            if self._conectar and no:
                 self._origem_tmp = no
                 p = no.centro()
                 self._linha_tmp = self.scene().addLine(
                     p.x(), p.y(), p.x(), p.y(), QPen(QColor("#dc2626"), 2, Qt.PenStyle.DashLine))
+                return
+            if not self._conectar and no is None:
+                # arrastar o vazio = mover o mapa (pan)
+                self._pan = True
+                self._pan_ini = ev.pos()
+                self.viewport().setCursor(Qt.CursorShape.ClosedHandCursor)
                 return
         super().mousePressEvent(ev)
 
@@ -255,6 +263,12 @@ class MapaView(QGraphicsView):
             p = self._origem_tmp.centro()
             alvo = self.mapToScene(ev.pos())
             self._linha_tmp.setLine(p.x(), p.y(), alvo.x(), alvo.y())
+            return
+        if self._pan and self._pan_ini is not None:
+            d = ev.pos() - self._pan_ini
+            self._pan_ini = ev.pos()
+            self.horizontalScrollBar().setValue(self.horizontalScrollBar().value() - d.x())
+            self.verticalScrollBar().setValue(self.verticalScrollBar().value() - d.y())
             return
         super().mouseMoveEvent(ev)
 
@@ -267,6 +281,11 @@ class MapaView(QGraphicsView):
             self._origem_tmp = None
             if destino and destino is not origem:
                 self._dlg.criar_proposicao(origem.cid, destino.cid)
+            return
+        if self._pan:
+            self._pan = False
+            self._pan_ini = None
+            self.viewport().setCursor(Qt.CursorShape.OpenHandCursor)
             return
         super().mouseReleaseEvent(ev)
         self._dlg.salvar_posicoes()  # persiste após arrastar nós
