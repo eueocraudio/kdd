@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPen, QPolygonF
+from PySide6.QtGui import QBrush, QColor, QFont, QFontMetricsF, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -40,9 +40,14 @@ from PySide6.QtWidgets import (
 
 from .api_client import KddApiError, KddClient
 
-NODE_W, NODE_H = 180.0, 64.0
-VGAP, HGAP = 150.0, 220.0
+MIN_W, MAX_W = 130.0, 230.0
+PAD = 9.0
+VGAP, HGAP = 70.0, 36.0   # folgas ENTRE caixas (somadas ao tamanho real de cada uma)
 _POS_FILE = Path.home() / ".kdd_map_pos.json"
+_FONT_ROT = QFont(); _FONT_ROT.setBold(True); _FONT_ROT.setPointSize(10)
+_FONT_SEN = QFont(); _FONT_SEN.setPointSize(8)
+_FM_ROT = QFontMetricsF(_FONT_ROT)
+_FM_SEN = QFontMetricsF(_FONT_SEN)
 
 
 def _cor_por_area(area: str) -> QColor:
@@ -58,6 +63,19 @@ def _cor_por_area(area: str) -> QColor:
 def _elide(texto: str, n: int) -> str:
     texto = texto or ""
     return texto if len(texto) <= n else texto[: n - 1] + "…"
+
+
+def _borda_da_caixa(no: "ConceitoNode", alvo: QPointF) -> QPointF:
+    """Ponto na borda da caixa do nó, na direção de ``alvo`` (+2px de folga)."""
+    c = no.centro()
+    dx, dy = alvo.x() - c.x(), alvo.y() - c.y()
+    if dx == 0 and dy == 0:
+        return c
+    hw, hh = no.w / 2 + 2, no.h / 2 + 2
+    sx = hw / abs(dx) if dx else float("inf")
+    sy = hh / abs(dy) if dy else float("inf")
+    s = min(sx, sy)
+    return QPointF(c.x() + dx * s, c.y() + dy * s)
 
 
 class ConceitoNode(QGraphicsItem):
@@ -82,9 +100,21 @@ class ConceitoNode(QGraphicsItem):
         if self.areas:
             tip += f"\náreas: {self.areas}"
         self.setToolTip(tip)
+        self._medir()
+
+    def _medir(self) -> None:
+        """Calcula largura/altura da caixa para o texto caber (com quebra de linha)."""
+        larg_texto = max(MIN_W, min(MAX_W, _FM_ROT.horizontalAdvance(self.rotulo) + 2 * PAD))
+        cw = larg_texto - 2 * PAD
+        flags = int(Qt.TextFlag.TextWordWrap | Qt.AlignmentFlag.AlignHCenter)
+        self._rot_h = _FM_ROT.boundingRect(QRectF(0, 0, cw, 1000), flags, self.rotulo).height()
+        self._sen_h = (_FM_SEN.boundingRect(QRectF(0, 0, cw, 1000), flags,
+                       self.sentido).height() if self.sentido else 0.0)
+        self.w = larg_texto
+        self.h = PAD + self._rot_h + (4 + self._sen_h if self.sentido else 0) + PAD
 
     def boundingRect(self) -> QRectF:
-        return QRectF(-NODE_W / 2, -NODE_H / 2, NODE_W, NODE_H)
+        return QRectF(-self.w / 2, -self.h / 2, self.w, self.h)
 
     def paint(self, painter: QPainter, option, widget=None) -> None:  # noqa: ANN001
         r = self.boundingRect()
@@ -98,22 +128,16 @@ class ConceitoNode(QGraphicsItem):
         painter.setPen(QPen(borda, 2.5 if self.foco else 1.5))
         painter.drawRoundedRect(r, 9, 9)
 
-        f = painter.font()
-        f.setBold(True)
-        f.setPointSize(10)
-        painter.setFont(f)
+        flags = Qt.AlignmentFlag.AlignHCenter | Qt.TextFlag.TextWordWrap
+        painter.setFont(_FONT_ROT)
         painter.setPen(QPen(QColor("#111827")))
-        rotulo_rect = QRectF(r.left() + 6, r.top() + 5, r.width() - 12, 20)
-        painter.drawText(rotulo_rect, Qt.AlignmentFlag.AlignCenter, _elide(self.rotulo, 26))
-
+        painter.drawText(QRectF(r.left() + PAD, r.top() + PAD, r.width() - 2 * PAD, self._rot_h),
+                         flags, self.rotulo)
         if self.sentido:
-            f.setBold(False)
-            f.setPointSize(8)
-            painter.setFont(f)
+            painter.setFont(_FONT_SEN)
             painter.setPen(QPen(QColor("#374151")))
-            sent_rect = QRectF(r.left() + 6, r.top() + 26, r.width() - 12, r.height() - 30)
-            painter.drawText(sent_rect, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.TextWordWrap,
-                             _elide(self.sentido, 70))
+            painter.drawText(QRectF(r.left() + PAD, r.top() + PAD + self._rot_h + 4,
+                                    r.width() - 2 * PAD, self._sen_h), flags, self.sentido)
 
     def centro(self) -> QPointF:
         return self.scenePos()
@@ -146,10 +170,8 @@ class ProposicaoEdge(QGraphicsItem):
     def adjust(self) -> None:
         self.prepareGeometryChange()
         c1, c2 = self.origem.centro(), self.destino.centro()
-        ang = math.atan2(c2.y() - c1.y(), c2.x() - c1.x())
-        off = QPointF(math.cos(ang) * (NODE_W / 2 + 2), math.sin(ang) * (NODE_H / 2 + 2))
-        self._p1 = c1 + off
-        self._p2 = c2 - off
+        self._p1 = _borda_da_caixa(self.origem, c2)
+        self._p2 = _borda_da_caixa(self.destino, c1)
 
     def boundingRect(self) -> QRectF:
         extra = 80.0
@@ -273,18 +295,25 @@ class MapaView(QGraphicsView):
 class MapaDialog(QDialog):
     """Mapa conceitual visual, com escopos conceito/documento/área."""
 
-    def __init__(self, client: KddClient, conceito_id: int | None = None, pai=None) -> None:  # noqa: ANN001
+    def __init__(self, client: KddClient, conceito_id: int | None = None, pai=None,  # noqa: ANN001
+                 escopo: str | None = None, alvo_id: int | None = None) -> None:
         super().__init__(pai)
         self._client = client
         self.pode_editar = client.pode_editar()
-        self._escopo = "conceito"      # conceito | fonte | area
-        self._foco = conceito_id       # id do conceito-foco (escopo conceito)
-        self._alvo_id: int | None = None  # id da fonte/área (escopos fonte/area)
+        self._escopo = escopo or "conceito"   # conceito | fonte | area
+        self._foco = conceito_id              # id do conceito-foco (escopo conceito)
+        self._alvo_id = alvo_id               # id da fonte/área (escopos fonte/area)
         self._nodes: dict[int, ConceitoNode] = {}
         self.setWindowTitle("Mapa Conceitual")
         self.resize(1000, 720)
         self._montar()
-        if self._foco:
+        if escopo in ("fonte", "area") and alvo_id:
+            idx = {"fonte": 1, "area": 2}[escopo]
+            self.cb_escopo.setCurrentIndex(idx)        # popula cb_alvo
+            ai = self.cb_alvo.findData(alvo_id)
+            if ai >= 0:
+                self.cb_alvo.setCurrentIndex(ai)
+        elif self._foco:
             self._recarregar()
         else:
             # sem conceito selecionado: abre no escopo Documento (escolhe a 1ª fonte)
@@ -443,7 +472,8 @@ class MapaDialog(QDialog):
 
     def _posicionar(self, edges: list[tuple[int, int]], foco_id: int | None) -> None:
         salvos = self._pos_salvas()
-        layout = _layout_hierarquico(list(self._nodes.keys()), edges)
+        sizes = {cid: (no.w, no.h) for cid, no in self._nodes.items()}
+        layout = _layout_hierarquico(list(self._nodes.keys()), edges, sizes)
         for cid, no in self._nodes.items():
             if str(cid) in salvos:
                 x, y = salvos[str(cid)]
@@ -538,14 +568,103 @@ class MapaDialog(QDialog):
             self._exec(lambda: self._client.split_conceito(cid, sentido.strip(), [], []))
 
 
-def _layout_hierarquico(ids: list[int], edges: list[tuple[int, int]]) -> dict[int, tuple[float, float]]:
-    """Ranqueia por caminho mais longo (Kahn) e espalha cada camada na horizontal."""
+class MapasDialog(QDialog):
+    """Área de Mapas: índice de todos os mapas (por documento e por área)."""
+
+    def __init__(self, client: KddClient, pai=None) -> None:  # noqa: ANN001
+        super().__init__(pai)
+        self._client = client
+        self.setWindowTitle("Mapas")
+        self.resize(720, 520)
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("<b>Escolha um mapa</b> (duplo-clique para abrir)"))
+
+        from PySide6.QtWidgets import QListWidget, QListWidgetItem, QTabWidget
+        self._ListWidgetItem = QListWidgetItem
+        abas = QTabWidget()
+
+        self.lst_docs = QListWidget()
+        self.lst_docs.itemDoubleClicked.connect(self._abrir_doc)
+        abas.addTab(self.lst_docs, "Documentos (fontes)")
+
+        self.lst_areas = QListWidget()
+        self.lst_areas.itemDoubleClicked.connect(self._abrir_area)
+        abas.addTab(self.lst_areas, "Áreas")
+        layout.addWidget(abas, 1)
+
+        barra = QHBoxLayout()
+        barra.addStretch(1)
+        b_abrir = QPushButton("Abrir")
+        b_abrir.clicked.connect(self._abrir_selecionado)
+        at = QPushButton("Atualizar")
+        at.clicked.connect(self._carregar)
+        barra.addWidget(at)
+        barra.addWidget(b_abrir)
+        layout.addLayout(barra)
+        self._abas = abas
+        self._carregar()
+
+    def _carregar(self) -> None:
+        try:
+            fontes = self._client.fontes()
+            areas = _achatar_areas(self._client.areas())
+            const = {a["id"]: a["conceitos"] for a in self._client.constelacao().get("areas", [])}
+        except KddApiError as e:
+            QMessageBox.warning(self, "Erro", str(e))
+            return
+        self.lst_docs.clear()
+        for f in fontes:
+            origem = f.get("origem", "")
+            sufixo = f"  ·  {f.get('status_aprovacao', '')}"
+            it = self._ListWidgetItem(f"#{f['id']} — {f.get('titulo') or ''}{sufixo}")
+            it.setData(Qt.ItemDataRole.UserRole, int(f["id"]))
+            self.lst_docs.addItem(it)
+        self.lst_areas.clear()
+        for a in areas:
+            n = const.get(a["id"], 0)
+            it = self._ListWidgetItem(f"{a['nome']}  ({n} conceito(s))")
+            it.setData(Qt.ItemDataRole.UserRole, a["id"])
+            self.lst_areas.addItem(it)
+
+    def _abrir_doc(self, item) -> None:  # noqa: ANN001
+        MapaDialog(self._client, escopo="fonte", alvo_id=int(item.data(Qt.ItemDataRole.UserRole)), pai=self).exec()
+
+    def _abrir_area(self, item) -> None:  # noqa: ANN001
+        MapaDialog(self._client, escopo="area", alvo_id=int(item.data(Qt.ItemDataRole.UserRole)), pai=self).exec()
+
+    def _abrir_selecionado(self) -> None:
+        if self._abas.currentIndex() == 0 and self.lst_docs.currentItem():
+            self._abrir_doc(self.lst_docs.currentItem())
+        elif self._abas.currentIndex() == 1 and self.lst_areas.currentItem():
+            self._abrir_area(self.lst_areas.currentItem())
+
+
+def _layout_hierarquico(
+    ids: list[int], edges: list[tuple[int, int]],
+    sizes: dict[int, tuple[float, float]] | None = None,
+) -> dict[int, tuple[float, float]]:
+    """Layout em camadas (Novak) com anti-colisão.
+
+    1) rank por caminho mais longo (Kahn); 2) ordena cada camada por baricentro
+    dos vizinhos (reduz cruzamentos de arestas); 3) empacota X usando a largura
+    REAL de cada caixa + folga; 4) Y por altura acumulada das camadas.
+    """
+    sizes = sizes or {}
+
+    def w(n: int) -> float:
+        return sizes.get(n, (MIN_W, 0.0))[0]
+
+    def h(n: int) -> float:
+        return sizes.get(n, (0.0, 64.0))[1]
+
     succ: dict[int, list[int]] = defaultdict(list)
+    pred: dict[int, list[int]] = defaultdict(list)
     indeg: dict[int, int] = {n: 0 for n in ids}
     vistos: set[tuple[int, int]] = set()
     for o, d in edges:
         if o in indeg and d in indeg and o != d and (o, d) not in vistos:
             succ[o].append(d)
+            pred[d].append(o)
             indeg[d] += 1
             vistos.add((o, d))
 
@@ -560,16 +679,43 @@ def _layout_hierarquico(ids: list[int], edges: list[tuple[int, int]]) -> dict[in
             if grau[v] == 0:
                 fila.append(v)
 
-    camadas: dict[int, list[int]] = defaultdict(list)
+    camadas_idx: dict[int, list[int]] = defaultdict(list)
     for n in ids:
-        camadas[rank[n]].append(n)
+        camadas_idx[rank[n]].append(n)
+    ranks = sorted(camadas_idx)
+    ordem = {r: list(camadas_idx[r]) for r in ranks}
+
+    def empacotar(r: int) -> dict[int, float]:
+        linha = ordem[r]
+        total = sum(w(n) for n in linha) + HGAP * max(len(linha) - 1, 0)
+        x = -total / 2
+        xs: dict[int, float] = {}
+        for n in linha:
+            xs[n] = x + w(n) / 2
+            x += w(n) + HGAP
+        return xs
+
+    xpos = {n: x for r in ranks for n, x in empacotar(r).items()}
+
+    # passes de baricentro (alternando direção) para reduzir cruzamentos
+    for passo in range(4):
+        seq = ranks if passo % 2 == 0 else list(reversed(ranks))
+        for r in seq:
+            viz = pred if passo % 2 == 0 else succ
+            def bary(n: int) -> float:
+                vs = viz[n]
+                return sum(xpos[v] for v in vs) / len(vs) if vs else xpos[n]
+            ordem[r].sort(key=bary)
+            for n, x in empacotar(r).items():
+                xpos[n] = x
 
     pos: dict[int, tuple[float, float]] = {}
-    for r in sorted(camadas):
-        linha = camadas[r]
-        largura = (len(linha) - 1) * HGAP
-        for i, n in enumerate(linha):
-            pos[n] = (i * HGAP - largura / 2, r * VGAP)
+    y = 0.0
+    for r in ranks:
+        alt = max((h(n) for n in ordem[r]), default=64.0)
+        for n in ordem[r]:
+            pos[n] = (xpos[n], y + alt / 2)
+        y += alt + VGAP
     return pos
 
 
