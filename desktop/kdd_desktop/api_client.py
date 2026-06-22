@@ -81,15 +81,16 @@ class KddClient:
     def fonte_mapa(self, fonte_id: int) -> dict[str, Any]:
         return self._get(f"/fontes/{fonte_id}/mapa")
 
-    def enviar_pdf(self, caminho: str, titulo: str | None = None) -> dict[str, Any]:
-        """Upload de PDF (operador) → fonte pendente. Dedup por hash no servidor:
+    def enviar_documento(self, caminho: str, titulo: str | None = None) -> dict[str, Any]:
+        """Upload de documento (PDF ou TXT, operador) → fonte pendente. Dedup por hash:
         se já existir o mesmo conteúdo, retorna {'duplicado': True, 'fonte': {...}}."""
         url = f"{self._cfg.base_url}/fontes"
+        mime = "text/plain" if Path(caminho).suffix.lower() == ".txt" else "application/pdf"
         try:
             with open(caminho, "rb") as fh:
                 r = self._s.post(
                     url,
-                    files={"arquivo": (Path(caminho).name, fh, "application/pdf")},
+                    files={"arquivo": (Path(caminho).name, fh, mime)},
                     data={"titulo": titulo} if titulo else {},
                     timeout=180,
                 )

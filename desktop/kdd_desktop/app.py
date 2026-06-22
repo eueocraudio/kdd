@@ -103,7 +103,7 @@ class MainWindow(QMainWindow):
         b_mapas.clicked.connect(self._abrir_mapas)
         barra.addWidget(b_mapas)
 
-        b_pdf = QPushButton("⬆ Enviar PDF")
+        b_pdf = QPushButton("⬆ Enviar documento")
         b_pdf.clicked.connect(self._enviar_pdf)
         barra.addWidget(b_pdf)
 
@@ -240,15 +240,16 @@ class MainWindow(QMainWindow):
     def _enviar_pdf(self) -> None:
         from pathlib import Path
         from PySide6.QtWidgets import QFileDialog
-        caminho, _ = QFileDialog.getOpenFileName(self, "Escolher PDF", "", "PDF (*.pdf)")
+        caminho, _ = QFileDialog.getOpenFileName(
+            self, "Escolher documento", "", "Documentos (*.pdf *.txt);;PDF (*.pdf);;Texto (*.txt)")
         if not caminho:
             return
         sugestao = Path(caminho).stem
-        titulo, ok = QInputDialog.getText(self, "Enviar PDF", "Título do documento:", text=sugestao)
+        titulo, ok = QInputDialog.getText(self, "Enviar documento", "Título do documento:", text=sugestao)
         if not ok:
             return
         try:
-            r = self._client.enviar_pdf(caminho, titulo.strip() or sugestao)
+            r = self._client.enviar_documento(caminho, titulo.strip() or sugestao)
         except KddApiError as e:
             self._erro(str(e))
             return

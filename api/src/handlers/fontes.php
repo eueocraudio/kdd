@@ -65,8 +65,8 @@ function fontes_criar(array $auth): void
     $file = $_FILES['arquivo'];
     $orig = (string) $file['name'];
     $ext  = strtolower(pathinfo($orig, PATHINFO_EXTENSION));
-    if ($ext !== 'pdf') {
-        json_error('Apenas arquivos .pdf', 415);
+    if (!in_array($ext, ['pdf', 'txt'], true)) {
+        json_error('Apenas arquivos .pdf ou .txt', 415);
     }
 
     // Dedup por conteúdo: hash do arquivo. Se já existe uma fonte com o mesmo
@@ -93,7 +93,7 @@ function fontes_criar(array $auth): void
         json_error('Não foi possível criar o diretório de storage', 500);
     }
 
-    $nome    = date('Ymd_His') . '_' . bin2hex(random_bytes(6)) . '.pdf';
+    $nome    = date('Ymd_His') . '_' . bin2hex(random_bytes(6)) . '.' . $ext;
     $destino = $dir . '/' . $nome;
     if (!move_uploaded_file($file['tmp_name'], $destino)) {
         json_error('Falha ao salvar o arquivo', 500);
@@ -134,8 +134,10 @@ function fontes_baixar(int $id): void
         json_error('Arquivo não encontrado no storage', 404);
     }
 
-    header('Content-Type: application/pdf');
-    header('Content-Disposition: attachment; filename="fonte_' . $id . '.pdf"');
+    $ext = strtolower(pathinfo($f['arquivo_caminho'], PATHINFO_EXTENSION)) ?: 'pdf';
+    $tipo = $ext === 'txt' ? 'text/plain; charset=utf-8' : 'application/pdf';
+    header('Content-Type: ' . $tipo);
+    header('Content-Disposition: attachment; filename="fonte_' . $id . '.' . $ext . '"');
     header('Content-Length: ' . filesize($caminho));
     readfile($caminho);
     exit;
