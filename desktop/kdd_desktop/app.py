@@ -305,6 +305,17 @@ def _html_conceito(c: dict[str, Any]) -> str:
             linhas.append(f"<li>{_e(f.get('titulo'))} — <i>{_e(f.get('status_aprovacao'))}</i></li>")
         linhas.append("</ul>")
 
+    # Conceitos mais intimamente ligados (vizinhos diretos, por força do vínculo)
+    ligados = _conceitos_ligados(c, limite=10)
+    if ligados:
+        linhas.append("<p><b>Conceitos mais ligados:</b></p><ol>")
+        for v in ligados:
+            linhas.append(
+                f"<li>{_e(v['rotulo'])} "
+                f"<span style='color:#888'>({v['ligacoes']} ligação(ões), certeza {v['certeza']})</span></li>"
+            )
+        linhas.append("</ol>")
+
     def bloco(titulo: str, props: list[dict[str, Any]], chave: str) -> None:
         if not props:
             return
@@ -320,6 +331,27 @@ def _html_conceito(c: dict[str, Any]) -> str:
     bloco("Proposições (origem)", c.get("proposicoes_origem", []), "destino")
     bloco("Proposições (destino)", c.get("proposicoes_destino", []), "origem")
     return "\n".join(linhas)
+
+
+def _conceitos_ligados(c: dict[str, Any], limite: int = 10) -> list[dict[str, Any]]:
+    """Vizinhos diretos do conceito, agregados por força do vínculo.
+
+    Conta quantas proposições ligam a cada vizinho e soma a certeza dessas
+    proposições; ordena por (nº de ligações, certeza) e devolve os ``limite`` maiores.
+    """
+    agg: dict[int, dict[str, Any]] = {}
+    for prop, chave in ((c.get("proposicoes_origem", []), "destino"),
+                        (c.get("proposicoes_destino", []), "origem")):
+        for p in prop:
+            outro = p.get(chave, {})
+            oid = outro.get("id")
+            if oid is None:
+                continue
+            v = agg.setdefault(oid, {"rotulo": outro.get("rotulo") or f"#{oid}", "ligacoes": 0, "certeza": 0})
+            v["ligacoes"] += 1
+            v["certeza"] += int(p.get("fontes_aprovadas") or 0)
+    ordenado = sorted(agg.values(), key=lambda v: (v["ligacoes"], v["certeza"]), reverse=True)
+    return ordenado[:limite]
 
 
 def _html_constelacao(d: dict[str, Any]) -> str:
