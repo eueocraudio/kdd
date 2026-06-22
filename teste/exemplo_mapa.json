@@ -1,0 +1,28 @@
+{
+  "areas": ["Futebol", "Geografia"],
+  "conceitos": [
+    {
+      "rotulo": "Botafogo de Futebol e Regatas",
+      "sentido": "Clube esportivo brasileiro de futebol e regatas",
+      "areas": ["Futebol"]
+    },
+    {
+      "rotulo": "bairro de Botafogo",
+      "sentido": "Bairro da zona sul do Rio de Janeiro",
+      "areas": ["Geografia"]
+    }
+  ],
+  "proposicoes": [
+    {
+      "origem_rotulo": "Botafogo de Futebol e Regatas",
+      "relacao": "fundado_em",
+      "destino_rotulo": "1904"
+    },
+    {
+      "origem_rotulo": "bairro de Botafogo",
+      "relacao": "localizado_em",
+      "destino_rotulo": "zona sul",
+      "destino_sentido": "Região geográfica do Rio de Janeiro"
+    }
+  ]
+}

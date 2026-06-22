@@ -20,9 +20,16 @@ class Pipeline:
         self._client = client
         self._ia = ia
 
-    def processar_pendentes(self) -> int:
+    def processar_pendentes(self, limite: int | None = None) -> int:
+        """Processa as fontes pendentes. ``limite`` > 0 processa no máximo essa
+        quantidade nesta execução (proteção de crédito); None ou 0 = sem limite."""
         pendentes = self._client.listar_pendentes()
-        log.info("fontes pendentes: %d", len(pendentes))
+        total = len(pendentes)
+        if limite is not None and limite > 0 and total > limite:
+            log.info("fontes pendentes: %d (limitando a %d nesta execução)", total, limite)
+            pendentes = pendentes[:limite]
+        else:
+            log.info("fontes pendentes: %d", total)
         ok = 0
         for fonte in pendentes:
             if self.processar_fonte(fonte):

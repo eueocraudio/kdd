@@ -28,7 +28,11 @@ class IAFacade:
     def a_partir_de(config: Config) -> "IAFacade":
         escolha = config.backend
         if escolha == "auto":
-            escolha = "claude" if config.anthropic_api_key else "ollama"
+            # 'auto' NUNCA escolhe um backend pago sozinho (proteção de crédito):
+            # usa o Ollama (local, sem custo). Para usar o Claude (backends 'cli' ou
+            # 'claude', que consomem crédito), selecione explicitamente via --backend
+            # ou KDD_IA_BACKEND.
+            escolha = "ollama"
 
         if escolha == "claude":
             from .claude_backend import ClaudeBackend
@@ -36,4 +40,8 @@ class IAFacade:
         if escolha == "ollama":
             from .ollama_backend import OllamaBackend
             return IAFacade(OllamaBackend(config.ollama_url, config.ollama_model))
+        if escolha == "cli":
+            # usa o Claude Code (CLI `claude`) — sem precisar de ANTHROPIC_API_KEY
+            from .cli_backend import CliBackend
+            return IAFacade(CliBackend(config.claude_model))
         raise RuntimeError(f"Backend de IA desconhecido: {config.backend!r}")
