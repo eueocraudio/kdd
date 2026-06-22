@@ -32,10 +32,15 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QInputDialog,
     QLabel,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMenu,
     QMessageBox,
     QPushButton,
+    QSplitter,
     QVBoxLayout,
+    QWidget,
 )
 
 from .api_client import KddApiError, KddClient
@@ -641,6 +646,109 @@ class MapasDialog(QDialog):
     def _abrir_selecionado(self) -> None:
         if self.lista.currentItem():
             self._abrir_item(self.lista.currentItem())
+
+
+class MapasTab(QWidget):
+    """Aba Mapas: lista de mapas à esquerda; conceitos do mapa selecionado à direita."""
+
+    def __init__(self, client: KddClient, pai=None) -> None:  # noqa: ANN001
+        super().__init__(pai)
+        self._client = client
+        layout = QVBoxLayout(self)
+        split = QSplitter()
+        layout.addWidget(split, 1)
+
+        # Esquerda: filtro + lista de mapas
+        esq = QWidget(); le = QVBoxLayout(esq); le.setContentsMargins(0, 0, 0, 0)
+        self.busca = QLineEdit(placeholderText="Filtrar mapas por título…")
+        self.busca.textChanged.connect(self._filtrar)
+        self.lst_mapas = QListWidget()
+        self.lst_mapas.currentItemChanged.connect(self._mapa_selecionado)
+        self.lst_mapas.itemDoubleClicked.connect(self._abrir_visual)
+        le.addWidget(QLabel("<b>Mapas</b>"))
+        le.addWidget(self.busca)
+        le.addWidget(self.lst_mapas, 1)
+        b_at = QPushButton("Atualizar")
+        b_at.clicked.connect(self._carregar)
+        le.addWidget(b_at)
+        split.addWidget(esq)
+
+        # Direita: conceitos do mapa selecionado
+        dir_ = QWidget(); ld = QVBoxLayout(dir_); ld.setContentsMargins(0, 0, 0, 0)
+        self.lbl = QLabel("<b>Conceitos do mapa</b>")
+        self.lst_conceitos = QListWidget()
+        ld.addWidget(self.lbl)
+        ld.addWidget(self.lst_conceitos, 1)
+        self.b_visual = QPushButton("Abrir no mapa visual")
+        self.b_visual.clicked.connect(lambda: self._abrir_visual(self.lst_mapas.currentItem()))
+        self.b_visual.setEnabled(False)
+        ld.addWidget(self.b_visual)
+        split.addWidget(dir_)
+        split.setSizes([320, 540])
+
+        self._carregar()
+
+    def _carregar(self) -> None:
+        try:
+            fontes = self._client.fontes()
+            areas = _achatar_areas(self._client.areas())
+            const = {a["id"]: a["conceitos"] for a in self._client.constelacao().get("areas", [])}
+        except KddApiError as e:
+            QMessageBox.warning(self, "Erro", str(e))
+            return
+        self.lst_mapas.clear()
+        for f in fontes:
+            proc = f.get("status_proc", "")
+            marca = {"pendente": "⏳", "processando": "⚙", "erro": "⚠"}.get(proc, "")
+            it = QListWidgetItem(f"📄  {f.get('titulo') or ('Fonte #' + str(f['id']))}  {marca}".rstrip())
+            it.setData(Qt.ItemDataRole.UserRole, ("fonte", int(f["id"])))
+            self.lst_mapas.addItem(it)
+        for a in areas:
+            it = QListWidgetItem(f"🗂  {a['nome']}  ({const.get(a['id'], 0)})")
+            it.setData(Qt.ItemDataRole.UserRole, ("area", a["id"]))
+            self.lst_mapas.addItem(it)
+        self._filtrar(self.busca.text())
+
+    def _filtrar(self, texto: str) -> None:
+        t = (texto or "").strip().lower()
+        for i in range(self.lst_mapas.count()):
+            it = self.lst_mapas.item(i)
+            it.setHidden(bool(t) and t not in it.text().lower())
+
+    def _mapa_selecionado(self, item, _ant=None) -> None:  # noqa: ANN001
+        self.lst_conceitos.clear()
+        self.b_visual.setEnabled(item is not None)
+        if item is None:
+            self.lbl.setText("<b>Conceitos do mapa</b>")
+            return
+        escopo, alvo = item.data(Qt.ItemDataRole.UserRole)
+        try:
+            conceitos = self._conceitos_do_mapa(escopo, alvo)
+        except KddApiError as e:
+            QMessageBox.warning(self, "Erro", str(e))
+            return
+        titulo = item.text().split("  ")[0] + "  " + " ".join(item.text().split("  ")[1:]).strip()
+        self.lbl.setText(f"<b>Conceitos do mapa</b> — {len(conceitos)}")
+        for c in conceitos:
+            rot = c.get("rotulo") or f"#{c['id']}"
+            sent = c.get("sentido") or ""
+            it = QListWidgetItem(f"{rot}" + (f" — {_elide(sent, 60)}" if sent else ""))
+            it.setData(Qt.ItemDataRole.UserRole, int(c["id"]))
+            it.setToolTip(sent)
+            self.lst_conceitos.addItem(it)
+
+    def _conceitos_do_mapa(self, escopo: str, alvo: int) -> list[dict[str, Any]]:
+        if escopo == "fonte":
+            return self._client.fonte_mapa(alvo).get("conceitos", [])
+        conc = self._client.conceitos(area=alvo)
+        return [{"id": c["id"], "rotulo": (c.get("rotulos") or "").split(",")[0].strip(),
+                 "sentido": c.get("sentido") or ""} for c in conc]
+
+    def _abrir_visual(self, item) -> None:  # noqa: ANN001
+        if not item:
+            return
+        escopo, alvo = item.data(Qt.ItemDataRole.UserRole)
+        MapaDialog(self._client, escopo=escopo, alvo_id=alvo, pai=self).exec()
 
 
 def _layout_hierarquico(

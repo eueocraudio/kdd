@@ -90,6 +90,8 @@ class MainWindow(QMainWindow):
         # Centro em abas; a 1ª aba é a navegação de áreas e conceitos.
         self.tabs = QTabWidget()
         self.tabs.addTab(split, "Áreas e Conceitos")
+        from .mapa import MapasTab
+        self.tabs.addTab(MapasTab(self._client), "Mapas")
         self.setCentralWidget(self.tabs)
 
         barra = self.addToolBar("Principal")
