@@ -38,6 +38,20 @@ def main() -> int:
         help="máximo de fontes por execução (proteção de crédito; 0 = sem limite). "
              "Em backend pago (cli/claude) sem este parâmetro, o padrão é 1.",
     )
+    parser.add_argument(
+        "--secoes",
+        type=int,
+        default=None,
+        metavar="CHARS",
+        help="ativa extração por seções de ~CHARS caracteres (sobrepõe KDD_CHARS_POR_SECAO; "
+             "0 = passada única). Cobre o documento inteiro, mas é mais lento (1 chamada/seção).",
+    )
+    parser.add_argument(
+        "--max-secoes",
+        type=int,
+        default=None,
+        help="limita o nº de seções processadas por documento (sobrepõe KDD_MAX_SECOES; 0 = todas).",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -50,6 +64,10 @@ def main() -> int:
         config = Config.carregar()
         if args.backend:
             config = dataclasses.replace(config, backend=args.backend)
+        if args.secoes is not None:
+            config = dataclasses.replace(config, chars_por_secao=args.secoes)
+        if args.max_secoes is not None:
+            config = dataclasses.replace(config, max_secoes=args.max_secoes)
         client = KddClient(config)
         ia = IAFacade.a_partir_de(config)
     except RuntimeError as e:

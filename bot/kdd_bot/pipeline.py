@@ -9,7 +9,7 @@ from typing import Any
 from .api_client import KddClient
 from .config import Config
 from .ia.facade import IAFacade
-from .pdf import extrair_texto
+from .pdf import extrair_secoes, extrair_texto
 
 log = logging.getLogger("kdd.bot")
 
@@ -45,6 +45,8 @@ class Pipeline:
 
             with tempfile.TemporaryDirectory() as tmp:
                 pdf = self._client.baixar_pdf(fid, Path(tmp) / f"fonte_{fid}.pdf")
+                if self._cfg.chars_por_secao > 0:
+                    return self._processar_em_secoes(fid, titulo, pdf)
                 texto = extrair_texto(pdf, self._cfg.max_chars_pdf)
 
             if not texto.strip():
@@ -70,3 +72,43 @@ class Pipeline:
             except Exception:  # noqa: BLE001
                 log.error("[fonte %s] não consegui marcar status=erro", fid)
             return False
+
+    def _processar_em_secoes(self, fid: int, titulo: str, pdf: Path) -> bool:
+        """Extrai o documento inteiro em seções; empurra um mapa por seção.
+
+        O push é idempotente e funde conceitos por SENTIDO, então conceitos
+        repetidos entre seções se unificam e proposições recorrentes ganham
+        certeza (mais referências da mesma fonte não duplicam, mas conceitos
+        que reaparecem consolidam o mapa do documento).
+        """
+        secoes = extrair_secoes(
+            pdf, self._cfg.chars_por_secao, self._cfg.max_chars_total, self._cfg.max_secoes
+        )
+        if not secoes:
+            raise RuntimeError("PDF sem texto extraível (talvez digitalizado/sem OCR).")
+
+        n = len(secoes)
+        log.info("[fonte %s] modo seções: %d seção(ões) de ~%d chars",
+                 fid, n, self._cfg.chars_por_secao)
+
+        total_c = total_p = 0
+        for i, secao in enumerate(secoes, start=1):
+            titulo_secao = f"{titulo} — seção {i}/{n}"
+            try:
+                mapa = self._ia.extrair_mapa(titulo_secao, secao)
+            except Exception as e:  # noqa: BLE001 — uma seção ruim não derruba o todo
+                log.warning("[fonte %s] seção %d/%d falhou (%s); seguindo", fid, i, n, e)
+                continue
+            if mapa["areas"]:
+                self._client.atualizar_status(fid, "processando", areas=mapa["areas"])
+            res = self._client.enviar_mapa(fid, mapa["conceitos"], mapa["proposicoes"])
+            total_c += len(mapa["conceitos"])
+            total_p += len(mapa["proposicoes"])
+            log.info("[fonte %s] seção %d/%d: +%d conceitos, +%d proposições (push: %s)",
+                     fid, i, n, len(mapa["conceitos"]), len(mapa["proposicoes"]), res.get("ok"))
+
+        # garante status processado (cada push já marca, mas reforça se tudo falhou)
+        self._client.atualizar_status(fid, "processado")
+        log.info("[fonte %s] concluído por seções: %d seções, %d conceitos e %d proposições enviados (brutos)",
+                 fid, n, total_c, total_p)
+        return True

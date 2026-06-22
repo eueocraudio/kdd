@@ -33,6 +33,9 @@ class Config:
     ollama_url: str
     ollama_model: str
     max_chars_pdf: int
+    chars_por_secao: int     # >0 ativa extração por seções (0 = passada única)
+    max_chars_total: int     # cap de segurança do texto total no modo seções
+    max_secoes: int          # >0 limita o nº de seções processadas (0 = todas)
 
     @staticmethod
     def carregar() -> "Config":
@@ -62,4 +65,7 @@ class Config:
             ollama_url=pega("KDD_OLLAMA_URL", padrao="http://localhost:11434").rstrip("/"),
             ollama_model=pega("KDD_OLLAMA_MODEL", padrao="qwen2.5:7b-instruct"),
             max_chars_pdf=int(pega("KDD_MAX_CHARS_PDF", padrao="60000")),
+            chars_por_secao=int(pega("KDD_CHARS_POR_SECAO", padrao="0")),
+            max_chars_total=int(pega("KDD_MAX_CHARS_TOTAL", padrao="400000")),
+            max_secoes=int(pega("KDD_MAX_SECOES", padrao="0")),
         )
