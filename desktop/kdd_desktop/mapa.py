@@ -569,39 +569,36 @@ class MapaDialog(QDialog):
 
 
 class MapasDialog(QDialog):
-    """Área de Mapas: índice de todos os mapas (por documento e por área)."""
+    """Lista de Mapas — cada mapa tem um título. Documentos (fontes) e Áreas."""
 
     def __init__(self, client: KddClient, pai=None) -> None:  # noqa: ANN001
         super().__init__(pai)
         self._client = client
         self.setWindowTitle("Mapas")
-        self.resize(720, 520)
+        self.resize(720, 540)
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("<b>Escolha um mapa</b> (duplo-clique para abrir)"))
+        layout.addWidget(QLabel("<b>Mapas</b> — duplo-clique para abrir"))
 
-        from PySide6.QtWidgets import QListWidget, QListWidgetItem, QTabWidget
+        from PySide6.QtWidgets import QLineEdit, QListWidget, QListWidgetItem
         self._ListWidgetItem = QListWidgetItem
-        abas = QTabWidget()
 
-        self.lst_docs = QListWidget()
-        self.lst_docs.itemDoubleClicked.connect(self._abrir_doc)
-        abas.addTab(self.lst_docs, "Documentos (fontes)")
+        self.busca = QLineEdit(placeholderText="Filtrar mapas por título…")
+        self.busca.textChanged.connect(self._filtrar)
+        layout.addWidget(self.busca)
 
-        self.lst_areas = QListWidget()
-        self.lst_areas.itemDoubleClicked.connect(self._abrir_area)
-        abas.addTab(self.lst_areas, "Áreas")
-        layout.addWidget(abas, 1)
+        self.lista = QListWidget()
+        self.lista.itemDoubleClicked.connect(self._abrir_item)
+        layout.addWidget(self.lista, 1)
 
         barra = QHBoxLayout()
         barra.addStretch(1)
-        b_abrir = QPushButton("Abrir")
+        b_abrir = QPushButton("Abrir mapa")
         b_abrir.clicked.connect(self._abrir_selecionado)
         at = QPushButton("Atualizar")
         at.clicked.connect(self._carregar)
         barra.addWidget(at)
         barra.addWidget(b_abrir)
         layout.addLayout(barra)
-        self._abas = abas
         self._carregar()
 
     def _carregar(self) -> None:
@@ -612,31 +609,36 @@ class MapasDialog(QDialog):
         except KddApiError as e:
             QMessageBox.warning(self, "Erro", str(e))
             return
-        self.lst_docs.clear()
+        self.lista.clear()
+        # Mapas de documento (título = título da fonte)
         for f in fontes:
-            origem = f.get("origem", "")
-            sufixo = f"  ·  {f.get('status_aprovacao', '')}"
-            it = self._ListWidgetItem(f"#{f['id']} — {f.get('titulo') or ''}{sufixo}")
-            it.setData(Qt.ItemDataRole.UserRole, int(f["id"]))
-            self.lst_docs.addItem(it)
-        self.lst_areas.clear()
+            titulo = f.get("titulo") or f"Fonte #{f['id']}"
+            it = self._ListWidgetItem(f"📄  {titulo}")
+            it.setData(Qt.ItemDataRole.UserRole, ("fonte", int(f["id"])))
+            it.setToolTip(f"Documento (fonte #{f['id']}) · {f.get('status_aprovacao', '')}")
+            self.lista.addItem(it)
+        # Mapas de área (título = nome da área)
         for a in areas:
             n = const.get(a["id"], 0)
-            it = self._ListWidgetItem(f"{a['nome']}  ({n} conceito(s))")
-            it.setData(Qt.ItemDataRole.UserRole, a["id"])
-            self.lst_areas.addItem(it)
+            it = self._ListWidgetItem(f"🗂  {a['nome']}  ({n} conceito(s))")
+            it.setData(Qt.ItemDataRole.UserRole, ("area", a["id"]))
+            it.setToolTip("Mapa da área")
+            self.lista.addItem(it)
+        self._filtrar(self.busca.text())
 
-    def _abrir_doc(self, item) -> None:  # noqa: ANN001
-        MapaDialog(self._client, escopo="fonte", alvo_id=int(item.data(Qt.ItemDataRole.UserRole)), pai=self).exec()
+    def _filtrar(self, texto: str) -> None:
+        t = (texto or "").strip().lower()
+        for i in range(self.lista.count()):
+            it = self.lista.item(i)
+            it.setHidden(bool(t) and t not in it.text().lower())
 
-    def _abrir_area(self, item) -> None:  # noqa: ANN001
-        MapaDialog(self._client, escopo="area", alvo_id=int(item.data(Qt.ItemDataRole.UserRole)), pai=self).exec()
+    def _abrir_item(self, item) -> None:  # noqa: ANN001
+        escopo, alvo = item.data(Qt.ItemDataRole.UserRole)
+        MapaDialog(self._client, escopo=escopo, alvo_id=alvo, pai=self).exec()
 
     def _abrir_selecionado(self) -> None:
-        if self._abas.currentIndex() == 0 and self.lst_docs.currentItem():
-            self._abrir_doc(self.lst_docs.currentItem())
-        elif self._abas.currentIndex() == 1 and self.lst_areas.currentItem():
-            self._abrir_area(self.lst_areas.currentItem())
+        if self.lista.currentItem():
+            self._abrir_item(self.lista.currentItem())
 
 
 def _layout_hierarquico(

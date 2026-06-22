@@ -90,11 +90,7 @@ class MainWindow(QMainWindow):
         atualizar.clicked.connect(self._recarregar)
         barra.addWidget(atualizar)
 
-        b_mapa = QPushButton("🗺 Mapa")
-        b_mapa.clicked.connect(self._abrir_mapa)
-        barra.addWidget(b_mapa)
-
-        b_mapas = QPushButton("🗂 Mapas")
+        b_mapas = QPushButton("🗺 Mapas")
         b_mapas.clicked.connect(self._abrir_mapas)
         barra.addWidget(b_mapas)
 
@@ -216,12 +212,6 @@ class MainWindow(QMainWindow):
             return
         self._carregar_areas()
         self.statusBar().showMessage(f"Área '{nome.strip()}' criada.")
-
-    def _abrir_mapa(self) -> None:
-        from .mapa import MapaDialog
-        # abre no conceito selecionado (se houver); senão, escopo documento/área
-        MapaDialog(self._client, self._conceito_atual, self).exec()
-        self._listar_conceitos()
 
     def _abrir_mapas(self) -> None:
         from .mapa import MapasDialog
