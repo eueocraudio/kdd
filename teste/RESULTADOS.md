@@ -35,6 +35,24 @@ para casar com `mapa_schema.json`.
   por JOIN sobre referências de fontes aprovadas (`vw_certeza_proposicao`). Reprovar
   derruba a certeza na mesma medida, sem recálculo.
 
+### Reexecução via `teste_cli.py` (fonte 10)
+
+O mesmo PDF foi reingerido pelo script reutilizável `bot/exemplos/teste_cli.py`
+(que sobe um PDF indicado e roda só aquela fonte no backend `cli`):
+
+- ~5,5 min · **5 áreas, 68 conceitos, 68 proposições** → `processado`.
+- Áreas: Sistemas Distribuídos, Redes de Computadores, Engenharia de Software,
+  Arquitetura de Software, Computação Paralela.
+- Ao aprovar a fonte 10, proposições com certeza > 0 foram de **69 → 137** (Δ +68).
+
+**Evidência forte da limitação "sinônimos não se fundem":** todas as 68 proposições
+da fonte 10 subiram `0 → 1` (e **não** `1 → 2`), apesar de a fonte 8 já ter ingerido
+o mesmo PDF. Os sentidos gerados nesta extração ficaram ligeiramente diferentes dos
+da fonte 8, então **criaram conceitos/proposições novos em vez de reforçar os
+existentes**. Duas ingestões do mesmo conteúdo **dobraram o grafo** em vez de aumentar
+a certeza das mesmas arestas — argumento concreto para uma etapa de merge por
+similaridade de sentido no Marco 4.
+
 ## Caso 2 — backend `ollama` (modelo local básico)
 
 - Ollama instalado em **modo usuário** (sem root/systemd) em `~/ollama-test`; descartável.
