@@ -73,6 +73,8 @@ class MainWindow(QMainWindow):
         self.tabela.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.tabela.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.tabela.cellClicked.connect(self._conceito_selecionado)
+        # também atualiza o detalhe ao navegar pelas setas do teclado
+        self.tabela.currentCellChanged.connect(self._linha_mudou)
 
         # Direita: detalhe
         self.detalhe = QTextBrowser()
@@ -167,6 +169,12 @@ class MainWindow(QMainWindow):
         item = self.tabela.item(linha, 0)
         if item:
             self._mostrar_detalhe(int(item.text()))
+
+    def _linha_mudou(self, linha: int, _c: int = -1, _pl: int = -1, _pc: int = -1) -> None:
+        if linha >= 0:
+            item = self.tabela.item(linha, 0)
+            if item:
+                self._mostrar_detalhe(int(item.text()))
 
     def _mostrar_detalhe(self, conceito_id: int) -> None:
         try:
