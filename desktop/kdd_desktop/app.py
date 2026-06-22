@@ -94,6 +94,10 @@ class MainWindow(QMainWindow):
         b_mapas.clicked.connect(self._abrir_mapas)
         barra.addWidget(b_mapas)
 
+        b_pdf = QPushButton("⬆ Enviar PDF")
+        b_pdf.clicked.connect(self._enviar_pdf)
+        barra.addWidget(b_pdf)
+
         # Ações de edição — só quando há token de validador (perfil de curadoria)
         if self._client.pode_editar():
             barra.addSeparator()
@@ -217,6 +221,34 @@ class MainWindow(QMainWindow):
         from .mapa import MapasDialog
         MapasDialog(self._client, self).exec()
         self._listar_conceitos()
+
+    def _enviar_pdf(self) -> None:
+        from pathlib import Path
+        from PySide6.QtWidgets import QFileDialog
+        caminho, _ = QFileDialog.getOpenFileName(self, "Escolher PDF", "", "PDF (*.pdf)")
+        if not caminho:
+            return
+        sugestao = Path(caminho).stem
+        titulo, ok = QInputDialog.getText(self, "Enviar PDF", "Título do documento:", text=sugestao)
+        if not ok:
+            return
+        try:
+            r = self._client.enviar_pdf(caminho, titulo.strip() or sugestao)
+        except KddApiError as e:
+            self._erro(str(e))
+            return
+        f = r.get("fonte", {})
+        if r.get("duplicado"):
+            QMessageBox.information(
+                self, "PDF já enviado",
+                f"Este PDF (mesmo conteúdo) já existe como fonte #{f.get('id')} "
+                f"(proc: {f.get('status_proc')}). Não será reprocessado.")
+        else:
+            QMessageBox.information(
+                self, "PDF enviado",
+                f"Enviado como fonte #{f.get('id')} (pendente). O bot vai processá-lo "
+                f"na próxima varredura (main.py --loop).")
+        self.statusBar().showMessage(f"Upload concluído: fonte #{f.get('id')}")
 
     def _abrir_constelacao(self) -> None:
         try:

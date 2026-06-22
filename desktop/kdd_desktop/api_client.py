@@ -1,6 +1,7 @@
 """Cliente HTTP dos endpoints de consulta do armazém KDD."""
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import requests
@@ -79,6 +80,28 @@ class KddClient:
 
     def fonte_mapa(self, fonte_id: int) -> dict[str, Any]:
         return self._get(f"/fontes/{fonte_id}/mapa")
+
+    def enviar_pdf(self, caminho: str, titulo: str | None = None) -> dict[str, Any]:
+        """Upload de PDF (operador) → fonte pendente. Dedup por hash no servidor:
+        se já existir o mesmo conteúdo, retorna {'duplicado': True, 'fonte': {...}}."""
+        url = f"{self._cfg.base_url}/fontes"
+        try:
+            with open(caminho, "rb") as fh:
+                r = self._s.post(
+                    url,
+                    files={"arquivo": (Path(caminho).name, fh, "application/pdf")},
+                    data={"titulo": titulo} if titulo else {},
+                    timeout=180,
+                )
+        except (requests.RequestException, OSError) as e:
+            raise KddApiError(f"Falha ao enviar: {e}") from e
+        ct = r.headers.get("content-type", "")
+        js = r.json() if (r.content and ct.startswith("application/json")) else {}
+        if r.status_code == 409:
+            return {"duplicado": True, **js}
+        if r.status_code >= 400:
+            raise KddApiError(f"HTTP {r.status_code}: {js.get('erro') or r.text}")
+        return {"duplicado": False, **js}
 
     # --- Endpoints de escrita (editor; exigem perfil validador) ---
     def criar_conceito(self, sentido: str, rotulo_principal: str, areas: list[str]) -> dict[str, Any]:

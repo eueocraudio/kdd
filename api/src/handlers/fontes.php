@@ -69,6 +69,25 @@ function fontes_criar(array $auth): void
         json_error('Apenas arquivos .pdf', 415);
     }
 
+    // Dedup por conteúdo: hash do arquivo. Se já existe uma fonte com o mesmo
+    // hash, não reenvia nem reprocessa — devolve a fonte existente (409).
+    $hash = hash_file('sha256', $file['tmp_name']);
+    $pdo  = kdd_db();
+    $dup  = $pdo->prepare("SELECT id, titulo, status_proc, status_aprovacao FROM fonte WHERE arquivo_hash = ? LIMIT 1");
+    $dup->execute([$hash]);
+    if ($existente = $dup->fetch()) {
+        json_out([
+            'erro'      => 'PDF já enviado anteriormente (mesmo conteúdo); não será reprocessado.',
+            'duplicado' => true,
+            'fonte'     => [
+                'id'               => (int) $existente['id'],
+                'titulo'           => $existente['titulo'],
+                'status_proc'      => $existente['status_proc'],
+                'status_aprovacao' => $existente['status_aprovacao'],
+            ],
+        ], 409);
+    }
+
     $dir = kdd_pdf_dir();
     if (!is_dir($dir) && !@mkdir($dir, 0775, true) && !is_dir($dir)) {
         json_error('Não foi possível criar o diretório de storage', 500);
@@ -82,12 +101,11 @@ function fontes_criar(array $auth): void
 
     $titulo = trim((string) ($_POST['titulo'] ?? '')) ?: pathinfo($orig, PATHINFO_FILENAME);
 
-    $pdo = kdd_db();
     $stmt = $pdo->prepare(
-        "INSERT INTO fonte (titulo, arquivo_caminho, status_proc, status_aprovacao)
-         VALUES (?, ?, 'pendente', 'pendente')"
+        "INSERT INTO fonte (titulo, arquivo_caminho, arquivo_hash, status_proc, status_aprovacao)
+         VALUES (?, ?, ?, 'pendente', 'pendente')"
     );
-    $stmt->execute([$titulo, $nome]);
+    $stmt->execute([$titulo, $nome, $hash]);
     $id = (int) $pdo->lastInsertId();
 
     json_out([

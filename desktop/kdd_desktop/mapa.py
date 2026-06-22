@@ -613,9 +613,11 @@ class MapasDialog(QDialog):
         # Mapas de documento (título = título da fonte)
         for f in fontes:
             titulo = f.get("titulo") or f"Fonte #{f['id']}"
-            it = self._ListWidgetItem(f"📄  {titulo}")
+            proc = f.get("status_proc", "")
+            marca = {"pendente": "⏳", "processando": "⚙", "processado": "", "erro": "⚠"}.get(proc, "")
+            it = self._ListWidgetItem(f"📄  {titulo}  {marca}".rstrip())
             it.setData(Qt.ItemDataRole.UserRole, ("fonte", int(f["id"])))
-            it.setToolTip(f"Documento (fonte #{f['id']}) · {f.get('status_aprovacao', '')}")
+            it.setToolTip(f"Documento (fonte #{f['id']}) · proc: {proc} · {f.get('status_aprovacao', '')}")
             self.lista.addItem(it)
         # Mapas de área (título = nome da área)
         for a in areas:
