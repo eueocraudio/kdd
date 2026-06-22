@@ -214,10 +214,8 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Área '{nome.strip()}' criada.")
 
     def _abrir_mapa(self) -> None:
-        if not self._conceito_atual:
-            QMessageBox.information(self, "Mapa", "Selecione um conceito primeiro.")
-            return
         from .mapa import MapaDialog
+        # abre no conceito selecionado (se houver); senão, escopo documento/área
         MapaDialog(self._client, self._conceito_atual, self).exec()
         self._listar_conceitos()
 

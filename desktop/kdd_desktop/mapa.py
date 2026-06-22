@@ -1,26 +1,37 @@
 """Mapa Conceitual visual (Novak) — canvas QGraphicsView editável.
 
-Conceitos viram nós (caixas); proposições viram setas rotuladas (origem →[relação]→
-destino), com a espessura proporcional à certeza. É um editor: arrastar move nós,
-puxar do nó em "modo conectar" cria proposição, duplo-clique re-centra o mapa no nó,
-botão direito abre operações (editar, mesclar, desambiguar, remover).
+Conceitos viram nós (caixas com rótulo + sentido, cor por área); proposições viram
+setas rotuladas (origem →[relação]→ destino), espessura/cor pela certeza. Layout
+HIERÁRQUICO (geral no topo, específico embaixo). Três escopos:
+  • Conceito  — a vizinhança de um conceito (navegável por duplo-clique);
+  • Documento — todos os conceitos/proposições de uma fonte (PDF);
+  • Área      — o mapa de uma área inteira.
 
-Usa os endpoints do editor já existentes via KddClient. Edição exige token validador.
+Edição (exige token validador): arrastar move nós (posição é salva), "Conectar"
+cria proposição arrastando de um nó a outro, botão direito edita/mescla/split/remove.
+Zoom com a roda; "Ajustar" enquadra tudo.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import math
+from collections import defaultdict, deque
+from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import QBrush, QColor, QPainter, QPen, QPolygonF
+from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import (
+    QComboBox,
     QDialog,
     QGraphicsItem,
     QGraphicsLineItem,
     QGraphicsScene,
     QGraphicsView,
+    QHBoxLayout,
     QInputDialog,
+    QLabel,
     QMenu,
     QMessageBox,
     QPushButton,
@@ -29,17 +40,36 @@ from PySide6.QtWidgets import (
 
 from .api_client import KddApiError, KddClient
 
-NODE_W, NODE_H = 150.0, 54.0
+NODE_W, NODE_H = 180.0, 64.0
+VGAP, HGAP = 150.0, 220.0
+_POS_FILE = Path.home() / ".kdd_map_pos.json"
+
+
+def _cor_por_area(area: str) -> QColor:
+    """Cor pastel determinística a partir do nome da (primeira) área."""
+    if not area:
+        return QColor("#e5e7eb")
+    h = int(hashlib.md5(area.encode("utf-8")).hexdigest(), 16)
+    cor = QColor()
+    cor.setHsl(h % 360, 150, 225)
+    return cor
+
+
+def _elide(texto: str, n: int) -> str:
+    texto = texto or ""
+    return texto if len(texto) <= n else texto[: n - 1] + "…"
 
 
 class ConceitoNode(QGraphicsItem):
-    """Caixa de um conceito; arrastável, guarda suas arestas para reposicioná-las."""
+    """Caixa de um conceito: rótulo + sentido, cor por área; arrastável."""
 
-    def __init__(self, cid: int, rotulo: str, sentido: str = "", foco: bool = False) -> None:
+    def __init__(self, cid: int, rotulo: str, sentido: str = "", areas: str = "",
+                 foco: bool = False) -> None:
         super().__init__()
         self.cid = cid
         self.rotulo = rotulo or f"#{cid}"
-        self.sentido = sentido
+        self.sentido = sentido or ""
+        self.areas = areas or ""
         self.foco = foco
         self.edges: list["ProposicaoEdge"] = []
         self.setFlags(
@@ -48,8 +78,10 @@ class ConceitoNode(QGraphicsItem):
             | QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges
         )
         self.setZValue(2)
-        if sentido:
-            self.setToolTip(f"{rotulo} — {sentido}")
+        tip = self.rotulo + (f" — {self.sentido}" if self.sentido else "")
+        if self.areas:
+            tip += f"\náreas: {self.areas}"
+        self.setToolTip(tip)
 
     def boundingRect(self) -> QRectF:
         return QRectF(-NODE_W / 2, -NODE_H / 2, NODE_W, NODE_H)
@@ -57,16 +89,31 @@ class ConceitoNode(QGraphicsItem):
     def paint(self, painter: QPainter, option, widget=None) -> None:  # noqa: ANN001
         r = self.boundingRect()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        cor = QColor("#fde68a") if self.foco else QColor("#e0e7ff")
-        borda = QColor("#b45309") if self.foco else QColor("#4338ca")
+        primeira_area = self.areas.split(",")[0].strip() if self.areas else ""
+        cor = QColor("#fde68a") if self.foco else _cor_por_area(primeira_area)
+        borda = QColor("#b45309") if self.foco else QColor("#475569")
         if self.isSelected():
             borda = QColor("#dc2626")
         painter.setBrush(QBrush(cor))
-        painter.setPen(QPen(borda, 2))
-        painter.drawRoundedRect(r, 8, 8)
+        painter.setPen(QPen(borda, 2.5 if self.foco else 1.5))
+        painter.drawRoundedRect(r, 9, 9)
+
+        f = painter.font()
+        f.setBold(True)
+        f.setPointSize(10)
+        painter.setFont(f)
         painter.setPen(QPen(QColor("#111827")))
-        texto = self.rotulo if len(self.rotulo) <= 30 else self.rotulo[:29] + "…"
-        painter.drawText(r, Qt.AlignmentFlag.AlignCenter, texto)
+        rotulo_rect = QRectF(r.left() + 6, r.top() + 5, r.width() - 12, 20)
+        painter.drawText(rotulo_rect, Qt.AlignmentFlag.AlignCenter, _elide(self.rotulo, 26))
+
+        if self.sentido:
+            f.setBold(False)
+            f.setPointSize(8)
+            painter.setFont(f)
+            painter.setPen(QPen(QColor("#374151")))
+            sent_rect = QRectF(r.left() + 6, r.top() + 26, r.width() - 12, r.height() - 30)
+            painter.drawText(sent_rect, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.TextWordWrap,
+                             _elide(self.sentido, 70))
 
     def centro(self) -> QPointF:
         return self.scenePos()
@@ -92,7 +139,6 @@ class ProposicaoEdge(QGraphicsItem):
         self._p1 = QPointF()
         self._p2 = QPointF()
         self.setZValue(1)
-        self.setAcceptedMouseButtons(Qt.MouseButton.AllButtons)
         origem.edges.append(self)
         destino.edges.append(self)
         self.adjust()
@@ -101,13 +147,12 @@ class ProposicaoEdge(QGraphicsItem):
         self.prepareGeometryChange()
         c1, c2 = self.origem.centro(), self.destino.centro()
         ang = math.atan2(c2.y() - c1.y(), c2.x() - c1.x())
-        # encosta as pontas na borda das caixas
         off = QPointF(math.cos(ang) * (NODE_W / 2 + 2), math.sin(ang) * (NODE_H / 2 + 2))
         self._p1 = c1 + off
         self._p2 = c2 - off
 
     def boundingRect(self) -> QRectF:
-        extra = 24.0
+        extra = 80.0
         return QRectF(self._p1, self._p2).normalized().adjusted(-extra, -extra, extra, extra)
 
     def paint(self, painter: QPainter, option, widget=None) -> None:  # noqa: ANN001
@@ -118,21 +163,27 @@ class ProposicaoEdge(QGraphicsItem):
         painter.drawLine(self._p1, self._p2)
         # cabeça da seta
         ang = math.atan2(self._p2.y() - self._p1.y(), self._p2.x() - self._p1.x())
-        tam = 11.0
+        tam = 12.0
         a = self._p2
         b = QPointF(a.x() - tam * math.cos(ang - math.pi / 7), a.y() - tam * math.sin(ang - math.pi / 7))
         c = QPointF(a.x() - tam * math.cos(ang + math.pi / 7), a.y() - tam * math.sin(ang + math.pi / 7))
         painter.setBrush(QBrush(cor))
         painter.drawPolygon(QPolygonF([a, b, c]))
-        # rótulo da relação no meio
+        # rótulo da relação com fundo legível
         meio = QPointF((self._p1.x() + self._p2.x()) / 2, (self._p1.y() + self._p2.y()) / 2)
+        f = painter.font(); f.setPointSize(8); painter.setFont(f)
+        txt = _elide(self.relacao, 26)
+        larg = painter.fontMetrics().horizontalAdvance(txt) + 8
+        cx = QRectF(meio.x() - larg / 2, meio.y() - 9, larg, 16)
+        painter.setBrush(QBrush(QColor(255, 255, 255, 220)))
+        painter.setPen(QPen(QColor("#d1d5db")))
+        painter.drawRoundedRect(cx, 4, 4)
         painter.setPen(QPen(QColor("#374151")))
-        rot = f"{self.relacao}  ({self.certeza})"
-        painter.drawText(meio + QPointF(4, -4), rot)
+        painter.drawText(cx, Qt.AlignmentFlag.AlignCenter, txt)
 
 
 class MapaView(QGraphicsView):
-    """Canvas. Em 'modo conectar', arrastar de um nó a outro cria proposição."""
+    """Canvas: zoom na roda; em 'Conectar', arrastar de um nó a outro cria proposição."""
 
     def __init__(self, dialog: "MapaDialog") -> None:
         super().__init__()
@@ -140,6 +191,7 @@ class MapaView(QGraphicsView):
         self.setScene(QGraphicsScene(self))
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
         self.setDragMode(QGraphicsView.DragMode.RubberBandDrag)
+        self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self._conectar = False
         self._origem_tmp: ConceitoNode | None = None
         self._linha_tmp: QGraphicsLineItem | None = None
@@ -149,6 +201,10 @@ class MapaView(QGraphicsView):
         self.setDragMode(
             QGraphicsView.DragMode.NoDrag if on else QGraphicsView.DragMode.RubberBandDrag
         )
+
+    def wheelEvent(self, ev) -> None:  # noqa: ANN001
+        fator = 1.15 if ev.angleDelta().y() > 0 else 1 / 1.15
+        self.scale(fator, fator)
 
     def _no_em(self, pos) -> ConceitoNode | None:  # noqa: ANN001
         for it in self.items(pos):
@@ -162,8 +218,8 @@ class MapaView(QGraphicsView):
             if no:
                 self._origem_tmp = no
                 p = no.centro()
-                self._linha_tmp = self.scene().addLine(p.x(), p.y(), p.x(), p.y(),
-                                                        QPen(QColor("#dc2626"), 2, Qt.PenStyle.DashLine))
+                self._linha_tmp = self.scene().addLine(
+                    p.x(), p.y(), p.x(), p.y(), QPen(QColor("#dc2626"), 2, Qt.PenStyle.DashLine))
                 return
         super().mousePressEvent(ev)
 
@@ -186,6 +242,7 @@ class MapaView(QGraphicsView):
                 self._dlg.criar_proposicao(origem.cid, destino.cid)
             return
         super().mouseReleaseEvent(ev)
+        self._dlg.salvar_posicoes()  # persiste após arrastar nós
 
     def mouseDoubleClickEvent(self, ev) -> None:  # noqa: ANN001
         no = self._no_em(ev.pos())
@@ -199,7 +256,7 @@ class MapaView(QGraphicsView):
         aresta = next((it for it in self.items(ev.pos()) if isinstance(it, ProposicaoEdge)), None)
         menu = QMenu(self)
         if no:
-            menu.addAction("Focar neste conceito", lambda: self._dlg.focar(no.cid))
+            menu.addAction("Focar (vizinhança deste conceito)", lambda: self._dlg.focar(no.cid))
             if self._dlg.pode_editar:
                 menu.addAction("Editar conceito…", lambda: self._dlg.editar_conceito(no.cid))
                 menu.addAction("Mesclar OUTRO aqui…", lambda: self._dlg.mesclar(no.cid))
@@ -214,92 +271,220 @@ class MapaView(QGraphicsView):
 
 
 class MapaDialog(QDialog):
-    """Janela do mapa conceitual de um conceito-foco e sua vizinhança."""
+    """Mapa conceitual visual, com escopos conceito/documento/área."""
 
-    def __init__(self, client: KddClient, conceito_id: int, pai=None) -> None:  # noqa: ANN001
+    def __init__(self, client: KddClient, conceito_id: int | None = None, pai=None) -> None:  # noqa: ANN001
         super().__init__(pai)
         self._client = client
         self.pode_editar = client.pode_editar()
-        self._foco = conceito_id
+        self._escopo = "conceito"      # conceito | fonte | area
+        self._foco = conceito_id       # id do conceito-foco (escopo conceito)
+        self._alvo_id: int | None = None  # id da fonte/área (escopos fonte/area)
+        self._nodes: dict[int, ConceitoNode] = {}
         self.setWindowTitle("Mapa Conceitual")
-        self.resize(900, 680)
+        self.resize(1000, 720)
+        self._montar()
+        if self._foco:
+            self._recarregar()
+        else:
+            # sem conceito selecionado: abre no escopo Documento (escolhe a 1ª fonte)
+            self.cb_escopo.setCurrentIndex(1)
 
+    # ── UI ──
+    def _montar(self) -> None:
         layout = QVBoxLayout(self)
         self.view = MapaView(self)
         layout.addWidget(self.view, 1)
 
-        from PySide6.QtWidgets import QHBoxLayout
         barra = QHBoxLayout()
-        self._b_conectar = QPushButton("🔗 Conectar (criar proposição)")
+        barra.addWidget(QLabel("Escopo:"))
+        self.cb_escopo = QComboBox()
+        self.cb_escopo.addItem("Conceito (vizinhança)", "conceito")
+        self.cb_escopo.addItem("Documento (fonte)", "fonte")
+        self.cb_escopo.addItem("Área", "area")
+        self.cb_escopo.currentIndexChanged.connect(self._mudar_escopo)
+        barra.addWidget(self.cb_escopo)
+
+        self.cb_alvo = QComboBox()
+        self.cb_alvo.setMinimumWidth(260)
+        self.cb_alvo.currentIndexChanged.connect(self._mudar_alvo)
+        self.cb_alvo.hide()
+        barra.addWidget(self.cb_alvo)
+
+        self._b_conectar = QPushButton("🔗 Conectar")
         self._b_conectar.setCheckable(True)
         self._b_conectar.setEnabled(self.pode_editar)
         self._b_conectar.toggled.connect(self.view.set_modo_conectar)
-        atualizar = QPushButton("Atualizar")
-        atualizar.clicked.connect(self._recarregar)
         barra.addWidget(self._b_conectar)
+
         if self.pode_editar:
             b_novo = QPushButton("＋ Conceito")
             b_novo.clicked.connect(self.novo_conceito)
             barra.addWidget(b_novo)
+
         barra.addStretch(1)
-        barra.addWidget(atualizar)
+        b_fit = QPushButton("Ajustar")
+        b_fit.clicked.connect(self._ajustar)
+        barra.addWidget(b_fit)
+        b_at = QPushButton("Atualizar")
+        b_at.clicked.connect(self._recarregar)
+        barra.addWidget(b_at)
         layout.addLayout(barra)
 
+    def _mudar_escopo(self) -> None:
+        self._escopo = self.cb_escopo.currentData()
+        self.cb_alvo.blockSignals(True)
+        self.cb_alvo.clear()
+        if self._escopo == "fonte":
+            for f in self._client.fontes():
+                self.cb_alvo.addItem(f"#{f['id']} — {f.get('titulo') or ''}", int(f["id"]))
+            self.cb_alvo.show()
+        elif self._escopo == "area":
+            for a in _achatar_areas(self._client.areas()):
+                self.cb_alvo.addItem(a["nome"], a["id"])
+            self.cb_alvo.show()
+        else:
+            self.cb_alvo.hide()
+        self.cb_alvo.blockSignals(False)
+        if self._escopo in ("fonte", "area") and self.cb_alvo.count():
+            self._alvo_id = self.cb_alvo.currentData()
         self._recarregar()
 
-    # ── carga e layout ──
+    def _mudar_alvo(self) -> None:
+        self._alvo_id = self.cb_alvo.currentData()
+        self._recarregar()
+
+    # ── carga + layout ──
     def focar(self, conceito_id: int) -> None:
+        if self._escopo != "conceito":
+            self.cb_escopo.setCurrentIndex(0)  # dispara _mudar_escopo
+        self._escopo = "conceito"
         self._foco = conceito_id
         self._recarregar()
 
+    def _coletar(self) -> tuple[list[dict[str, Any]], list[dict[str, Any]], int | None, str]:
+        """Retorna (conceitos, proposicoes, foco_id, titulo) conforme o escopo."""
+        if self._escopo == "fonte" and self._alvo_id:
+            d = self._client.fonte_mapa(self._alvo_id)
+            return d.get("conceitos", []), d.get("proposicoes", []), None, \
+                f"Documento: {d.get('fonte', {}).get('titulo', '')}"
+        if self._escopo == "area" and self._alvo_id:
+            conc = self._client.conceitos(area=self._alvo_id)
+            conceitos = [{"id": c["id"], "rotulo": (c.get("rotulos") or "").split(",")[0].strip(),
+                          "sentido": c.get("sentido") or "", "areas": c.get("areas") or ""} for c in conc]
+            ids = {c["id"] for c in conceitos}
+            props = [p for p in self._client.proposicoes()
+                     if p["origem"]["id"] in ids and p["destino"]["id"] in ids]
+            nome = self.cb_alvo.currentText() if self.cb_alvo.count() else ""
+            return conceitos, props, None, f"Área: {nome}"
+        # escopo conceito (vizinhança)
+        if not self._foco:
+            return [], [], None, ""
+        c = self._client.conceito(self._foco)
+        if not c:
+            return [], [], None, ""
+        rot = _rotulo_principal(c)
+        areas = ", ".join(a["nome"] for a in c.get("areas", []))
+        conceitos = [{"id": self._foco, "rotulo": rot, "sentido": c.get("sentido") or "", "areas": areas}]
+        props: list[dict[str, Any]] = []
+        for p in c.get("proposicoes_origem", []):
+            o = p["destino"]
+            conceitos.append({"id": o["id"], "rotulo": o.get("rotulo") or "", "sentido": "", "areas": ""})
+            props.append({"id": p["proposicao_id"], "relacao": p["relacao"],
+                          "origem": {"id": self._foco}, "destino": {"id": o["id"]},
+                          "fontes_aprovadas": p.get("fontes_aprovadas", 0)})
+        for p in c.get("proposicoes_destino", []):
+            o = p["origem"]
+            conceitos.append({"id": o["id"], "rotulo": o.get("rotulo") or "", "sentido": "", "areas": ""})
+            props.append({"id": p["proposicao_id"], "relacao": p["relacao"],
+                          "origem": {"id": o["id"]}, "destino": {"id": self._foco},
+                          "fontes_aprovadas": p.get("fontes_aprovadas", 0)})
+        return conceitos, props, self._foco, f"Conceito: {rot}"
+
     def _recarregar(self) -> None:
         try:
-            c = self._client.conceito(self._foco)
+            conceitos, props, foco_id, titulo = self._coletar()
         except KddApiError as e:
             QMessageBox.warning(self, "Erro", str(e))
-            return
-        if not c:
-            QMessageBox.information(self, "Mapa", "Conceito não encontrado.")
             return
 
         cena = QGraphicsScene(self)
         self.view.setScene(cena)
+        self._nodes = {}
 
-        rot_foco = _rotulo_principal(c)
-        foco = ConceitoNode(self._foco, rot_foco, c.get("sentido") or "", foco=True)
-        cena.addItem(foco)
-        foco.setPos(0, 0)
-        nos: dict[int, ConceitoNode] = {self._foco: foco}
+        # dedup conceitos por id
+        vistos: dict[int, dict[str, Any]] = {}
+        for c in conceitos:
+            cid = int(c["id"])
+            if cid not in vistos or (not vistos[cid].get("sentido") and c.get("sentido")):
+                vistos[cid] = c
 
-        vizinhos: list[tuple[dict[str, Any], bool]] = []
-        for p in c.get("proposicoes_origem", []):
-            vizinhos.append((p, True))
-        for p in c.get("proposicoes_destino", []):
-            vizinhos.append((p, False))
+        for cid, c in vistos.items():
+            no = ConceitoNode(cid, c.get("rotulo") or f"#{cid}", c.get("sentido") or "",
+                              c.get("areas") or "", foco=(cid == foco_id))
+            cena.addItem(no)
+            self._nodes[cid] = no
 
-        n = max(len(vizinhos), 1)
-        raio = 280.0
-        for i, (p, saindo) in enumerate(vizinhos):
-            ang = (2 * math.pi * i) / n - math.pi / 2
-            outro = p.get("destino" if saindo else "origem", {})
-            oid = int(outro.get("id") or 0)
-            if oid and oid not in nos:
-                no = ConceitoNode(oid, outro.get("rotulo") or f"#{oid}")
-                cena.addItem(no)
-                no.setPos(raio * math.cos(ang), raio * math.sin(ang))
-                nos[oid] = no
-            origem_no = foco if saindo else nos.get(oid)
-            destino_no = nos.get(oid) if saindo else foco
-            if origem_no and destino_no:
-                cena.addItem(ProposicaoEdge(
-                    int(p.get("proposicao_id") or 0), origem_no, destino_no,
-                    p.get("relacao") or "", int(p.get("fontes_aprovadas") or 0)))
+        edges_ids: list[tuple[int, int]] = []
+        for p in props:
+            oid, did = int(p["origem"]["id"]), int(p["destino"]["id"])
+            if oid in self._nodes and did in self._nodes:
+                cena.addItem(ProposicaoEdge(int(p.get("id") or 0), self._nodes[oid],
+                                            self._nodes[did], p.get("relacao") or "",
+                                            int(p.get("fontes_aprovadas") or 0)))
+                edges_ids.append((oid, did))
 
+        self._posicionar(edges_ids, foco_id)
         self.view.set_modo_conectar(self._b_conectar.isChecked())
-        cena.setSceneRect(cena.itemsBoundingRect().adjusted(-80, -80, 80, 80))
-        self.setWindowTitle(f"Mapa Conceitual — {rot_foco} (#{self._foco})")
+        cena.setSceneRect(cena.itemsBoundingRect().adjusted(-100, -100, 100, 100))
+        self._ajustar()
+        n_c, n_p = len(self._nodes), len(edges_ids)
+        self.setWindowTitle(f"Mapa Conceitual — {titulo}  ({n_c} conceitos, {n_p} proposições)")
 
-    # ── operações (chamam a API e recarregam) ──
+    def _posicionar(self, edges: list[tuple[int, int]], foco_id: int | None) -> None:
+        salvos = self._pos_salvas()
+        layout = _layout_hierarquico(list(self._nodes.keys()), edges)
+        for cid, no in self._nodes.items():
+            if str(cid) in salvos:
+                x, y = salvos[str(cid)]
+            else:
+                x, y = layout.get(cid, (0.0, 0.0))
+            no.setPos(x, y)
+        for no in self._nodes.values():
+            for e in no.edges:
+                e.adjust()
+
+    def _ajustar(self) -> None:
+        r = self.view.scene().itemsBoundingRect()
+        if not r.isEmpty():
+            self.view.fitInView(r.adjusted(-40, -40, 40, 40), Qt.AspectRatioMode.KeepAspectRatio)
+
+    # ── posições persistidas ──
+    def _chave_pos(self) -> str:
+        alvo = self._foco if self._escopo == "conceito" else self._alvo_id
+        return f"{self._escopo}:{alvo}"
+
+    def _pos_salvas(self) -> dict[str, list[float]]:
+        try:
+            todas = json.loads(_POS_FILE.read_text(encoding="utf-8")) if _POS_FILE.is_file() else {}
+        except (OSError, ValueError):
+            return {}
+        return todas.get(self._chave_pos(), {})
+
+    def salvar_posicoes(self) -> None:
+        try:
+            todas = json.loads(_POS_FILE.read_text(encoding="utf-8")) if _POS_FILE.is_file() else {}
+        except (OSError, ValueError):
+            todas = {}
+        todas[self._chave_pos()] = {
+            str(cid): [no.scenePos().x(), no.scenePos().y()] for cid, no in self._nodes.items()
+        }
+        try:
+            _POS_FILE.write_text(json.dumps(todas, ensure_ascii=False), encoding="utf-8")
+        except OSError:
+            pass
+
+    # ── operações de edição (chamam a API e recarregam) ──
     def _exec(self, fn) -> None:  # noqa: ANN001
         try:
             fn()
@@ -351,6 +536,56 @@ class MapaDialog(QDialog):
         sentido, ok = QInputDialog.getText(self, "Desambiguar", "Sentido do conceito novo:")
         if ok and sentido.strip():
             self._exec(lambda: self._client.split_conceito(cid, sentido.strip(), [], []))
+
+
+def _layout_hierarquico(ids: list[int], edges: list[tuple[int, int]]) -> dict[int, tuple[float, float]]:
+    """Ranqueia por caminho mais longo (Kahn) e espalha cada camada na horizontal."""
+    succ: dict[int, list[int]] = defaultdict(list)
+    indeg: dict[int, int] = {n: 0 for n in ids}
+    vistos: set[tuple[int, int]] = set()
+    for o, d in edges:
+        if o in indeg and d in indeg and o != d and (o, d) not in vistos:
+            succ[o].append(d)
+            indeg[d] += 1
+            vistos.add((o, d))
+
+    rank: dict[int, int] = {n: 0 for n in ids}
+    grau = dict(indeg)
+    fila = deque([n for n in ids if grau[n] == 0])
+    while fila:
+        u = fila.popleft()
+        for v in succ[u]:
+            rank[v] = max(rank[v], rank[u] + 1)
+            grau[v] -= 1
+            if grau[v] == 0:
+                fila.append(v)
+
+    camadas: dict[int, list[int]] = defaultdict(list)
+    for n in ids:
+        camadas[rank[n]].append(n)
+
+    pos: dict[int, tuple[float, float]] = {}
+    for r in sorted(camadas):
+        linha = camadas[r]
+        largura = (len(linha) - 1) * HGAP
+        for i, n in enumerate(linha):
+            pos[n] = (i * HGAP - largura / 2, r * VGAP)
+    return pos
+
+
+def _achatar_areas(arvore: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Achata a árvore de áreas (id, nome) numa lista ordenada por nome."""
+    out: list[dict[str, Any]] = []
+
+    def visita(no: dict[str, Any]) -> None:
+        out.append({"id": no["id"], "nome": no["nome"]})
+        for f in no.get("filhos", []):
+            visita(f)
+
+    for raiz in arvore:
+        visita(raiz)
+    out.sort(key=lambda a: a["nome"])
+    return out
 
 
 def _rotulo_principal(c: dict[str, Any]) -> str:

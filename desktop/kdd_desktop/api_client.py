@@ -74,6 +74,12 @@ class KddClient:
     def constelacao(self) -> dict[str, Any]:
         return self._get("/constelacao")
 
+    def fontes(self) -> list[dict[str, Any]]:
+        return self._get("/fontes").get("fontes", [])
+
+    def fonte_mapa(self, fonte_id: int) -> dict[str, Any]:
+        return self._get(f"/fontes/{fonte_id}/mapa")
+
     # --- Endpoints de escrita (editor; exigem perfil validador) ---
     def criar_conceito(self, sentido: str, rotulo_principal: str, areas: list[str]) -> dict[str, Any]:
         return self._escrita("POST", "/conceitos",

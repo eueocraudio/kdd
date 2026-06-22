@@ -52,6 +52,10 @@ if (preg_match('#^/fontes/(\d+)/arquivo$#', $path, $m) && $method === 'GET') {
     fontes_baixar((int) $m[1]);
 }
 
+if (preg_match('#^/fontes/(\d+)/mapa$#', $path, $m) && $method === 'GET') {
+    fonte_mapa((int) $m[1]);
+}
+
 if (preg_match('#^/fontes/(\d+)/mapas$#', $path, $m) && $method === 'POST') {
     fontes_mapas((int) $m[1]);
 }

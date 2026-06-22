@@ -225,6 +225,65 @@ function proposicoes_listar(): void
     json_out(['proposicoes' => $proposicoes]);
 }
 
+/**
+ * GET /fontes/{id}/mapa — conceitos e proposições de uma fonte (documento),
+ * para desenhar o mapa conceitual inteiro daquele PDF. Os conceitos saem de
+ * conceito_fonte; as proposições, das referências da própria fonte (com certeza).
+ */
+function fonte_mapa(int $id): void
+{
+    $pdo = kdd_db();
+    $s = $pdo->prepare("SELECT id, titulo FROM fonte WHERE id = ?");
+    $s->execute([$id]);
+    $fonte = $s->fetch();
+    if (!$fonte) {
+        json_error('Fonte não encontrada', 404);
+    }
+
+    $s = $pdo->prepare(
+        "SELECT c.id, c.sentido,
+                (SELECT texto FROM rotulo WHERE conceito_id = c.id ORDER BY principal DESC, id LIMIT 1) AS rotulo,
+                GROUP_CONCAT(DISTINCT a.nome ORDER BY a.nome SEPARATOR ', ') AS areas
+           FROM conceito_fonte cf
+           JOIN conceito c          ON c.id = cf.conceito_id
+           LEFT JOIN conceito_area ca ON ca.conceito_id = c.id
+           LEFT JOIN area a         ON a.id = ca.area_id
+          WHERE cf.fonte_id = ?
+          GROUP BY c.id, c.sentido ORDER BY c.id"
+    );
+    $s->execute([$id]);
+    $conceitos = array_map(static function (array $r): array {
+        return ['id' => (int) $r['id'], 'rotulo' => $r['rotulo'], 'sentido' => $r['sentido'], 'areas' => $r['areas']];
+    }, $s->fetchAll());
+
+    $s = $pdo->prepare(
+        "SELECT p.id, p.relacao,
+                p.conceito_origem  AS origem_id,
+                (SELECT texto FROM rotulo WHERE conceito_id = p.conceito_origem  ORDER BY principal DESC, id LIMIT 1) AS origem_rotulo,
+                p.conceito_destino AS destino_id,
+                (SELECT texto FROM rotulo WHERE conceito_id = p.conceito_destino ORDER BY principal DESC, id LIMIT 1) AS destino_rotulo,
+                v.fontes_aprovadas
+           FROM referencia rf
+           JOIN proposicao p ON p.id = rf.proposicao_id
+           JOIN vw_certeza_proposicao v ON v.proposicao_id = p.id
+          WHERE rf.fonte_id = ?
+          ORDER BY p.id"
+    );
+    $s->execute([$id]);
+    $proposicoes = array_map(static function (array $r): array {
+        return [
+            'id'               => (int) $r['id'],
+            'relacao'          => $r['relacao'],
+            'origem'           => ['id' => (int) $r['origem_id'],  'rotulo' => $r['origem_rotulo']],
+            'destino'          => ['id' => (int) $r['destino_id'], 'rotulo' => $r['destino_rotulo']],
+            'fontes_aprovadas' => (int) $r['fontes_aprovadas'],
+        ];
+    }, $s->fetchAll());
+
+    json_out(['fonte' => ['id' => (int) $fonte['id'], 'titulo' => $fonte['titulo']],
+              'conceitos' => $conceitos, 'proposicoes' => $proposicoes]);
+}
+
 /* ─────────────────────── Constelação ─────────────────────── */
 
 /**
