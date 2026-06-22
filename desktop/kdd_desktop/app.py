@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QSplitter,
+    QTabWidget,
     QTableWidget,
     QTableWidgetItem,
     QTextBrowser,
@@ -85,7 +86,11 @@ class MainWindow(QMainWindow):
         split.addWidget(self.tabela)
         split.addWidget(self.detalhe)
         split.setSizes([260, 420, 480])
-        self.setCentralWidget(split)
+
+        # Centro em abas; a 1ª aba é a navegação de áreas e conceitos.
+        self.tabs = QTabWidget()
+        self.tabs.addTab(split, "Áreas e Conceitos")
+        self.setCentralWidget(self.tabs)
 
         barra = self.addToolBar("Principal")
         atualizar = QPushButton("Atualizar")
