@@ -55,7 +55,7 @@ def main() -> int:
             timeout=60,
         )
     resp.raise_for_status()
-    fonte = resp.json()
+    fonte = resp.json().get("fonte", resp.json())  # a API responde {"fonte": {...}}
     fid = int(fonte["id"])
     print(f"[upload] fonte criada: id={fid} status={fonte.get('status_proc')}")
 
