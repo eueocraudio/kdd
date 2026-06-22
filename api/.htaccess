@@ -1,0 +1,16 @@
+RewriteEngine On
+
+# Repassa o cabeçalho Authorization ao PHP (CGI/FPM costuma descartá-lo)
+RewriteCond %{HTTP:Authorization} .
+RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+
+# Bloqueia acesso web direto a arquivos sensíveis
+RewriteRule ^(\.env(\.example)?|tokens(\.example)?\.json|migrate\.php)$ - [F,L]
+
+# Bloqueia acesso web direto às pastas internas
+RewriteRule ^(src|migrations|storage)(/|$) - [F,L]
+
+# Front controller: o que não for arquivo/diretório real vai para index.php
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^ index.php [L]

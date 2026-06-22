@@ -1,0 +1,19 @@
+# Segredos / configuração local (NÃO versionar) — repositório é PÚBLICO
+.env
+*.env
+!.env.example
+!*.env.example
+tokens.json
+**/tokens.json
+!tokens.example.json
+!**/tokens.example.json
+api/config.php
+
+# PDFs enviados
+api/storage/pdfs/*
+!api/storage/pdfs/.gitkeep
+
+# Dependências / artefatos
+vendor/
+*.log
+.DS_Store

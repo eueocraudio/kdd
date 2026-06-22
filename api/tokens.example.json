@@ -1,0 +1,6 @@
+{
+  "tokens": [
+    { "token": "TROQUE_POR_UM_TOKEN_ALEATORIO_LONGO", "descricao": "operador - wellington", "perfil": "operador" },
+    { "token": "OUTRO_TOKEN_ALEATORIO_LONGO",          "descricao": "validador - fulano",    "perfil": "validador" }
+  ]
+}
