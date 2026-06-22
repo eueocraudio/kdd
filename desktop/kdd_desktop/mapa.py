@@ -420,6 +420,10 @@ class MapaDialog(QDialog):
             barra.addWidget(b_novo)
 
         barra.addStretch(1)
+        b_exp = QPushButton("⤢ Expandir")
+        b_exp.setToolTip("Aumenta a área do diagrama para espalhar os conceitos.")
+        b_exp.clicked.connect(self._expandir)
+        barra.addWidget(b_exp)
         b_fit = QPushButton("Ajustar")
         b_fit.clicked.connect(self._ajustar)
         barra.addWidget(b_fit)
@@ -574,6 +578,14 @@ class MapaDialog(QDialog):
         sr = self.view.sceneRect()
         if sr.isValid() and not sr.isEmpty():
             self.view.fitInView(sr, Qt.AspectRatioMode.KeepAspectRatio)
+
+    def _expandir(self) -> None:
+        """Aumenta a folha do diagrama (mais espaço ao redor dos conceitos)."""
+        sr = self.view.sceneRect()
+        dx = max(sr.width() * 0.25, 250.0)
+        dy = max(sr.height() * 0.25, 180.0)
+        self.view.scene().setSceneRect(sr.adjusted(-dx, -dy, dx, dy))
+        self.view.viewport().update()
 
     # ── posições persistidas ──
     def _chave_pos(self) -> str:
