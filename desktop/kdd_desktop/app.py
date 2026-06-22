@@ -4,9 +4,10 @@ from __future__ import annotations
 import html
 from typing import Any
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QComboBox,
     QDialogButtonBox,
     QDialog,
@@ -92,6 +93,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(split, "Áreas e Conceitos")
         from .mapa import MapasTab
         self.tabs.addTab(MapasTab(self._client), "Mapas")
+        self.tabs.addTab(FilaTab(self._client), "Fila")
         self.setCentralWidget(self.tabs)
 
         barra = self.addToolBar("Principal")
@@ -625,6 +627,106 @@ class ConceitoEditorDialog(QDialog):
                     for l in range(self.props.rowCount())
                     if self.props.item(l, 1) and self.props.item(l, 1).isSelected()]
         self._executar(lambda: self._client.split_conceito(self._cid, sentido.strip(), rot_ids, prop_ids))
+
+
+class FilaTab(QWidget):
+    """Feedback da fila de processamento de documentos (PDF/TXT)."""
+
+    _ICON = {"pendente": "⏳ pendente", "processando": "⚙ processando",
+             "processado": "✓ processado", "erro": "⚠ erro"}
+
+    def __init__(self, client: KddClient) -> None:
+        super().__init__()
+        self._client = client
+        self.pode_editar = client.pode_editar()
+        layout = QVBoxLayout(self)
+
+        topo = QHBoxLayout()
+        self.resumo = QLabel("—")
+        topo.addWidget(self.resumo, 1)
+        self.chk_auto = QCheckBox("Atualizar automaticamente")
+        self.chk_auto.setChecked(True)
+        topo.addWidget(self.chk_auto)
+        b_at = QPushButton("Atualizar")
+        b_at.clicked.connect(self._carregar)
+        topo.addWidget(b_at)
+        layout.addLayout(topo)
+
+        self.tabela = QTableWidget(0, 5)
+        self.tabela.setHorizontalHeaderLabels(["ID", "Título", "Processamento", "Aprovação", "Criado em"])
+        self.tabela.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.tabela.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.tabela.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        layout.addWidget(self.tabela, 1)
+
+        if self.pode_editar:
+            acoes = QHBoxLayout()
+            acoes.addStretch(1)
+            b_ap = QPushButton("Aprovar fonte")
+            b_ap.clicked.connect(lambda: self._moderar(True))
+            b_rp = QPushButton("Reprovar fonte")
+            b_rp.clicked.connect(lambda: self._moderar(False))
+            acoes.addWidget(b_ap)
+            acoes.addWidget(b_rp)
+            layout.addLayout(acoes)
+
+        self._timer = QTimer(self)
+        self._timer.setInterval(5000)
+        self._timer.timeout.connect(self._tick)
+        self._timer.start()
+        self._carregar()
+
+    def _tick(self) -> None:
+        if self.chk_auto.isChecked() and self.isVisible():
+            self._carregar()
+
+    def _carregar(self) -> None:
+        sel = self._sel_id()
+        try:
+            fontes = self._client.fontes()
+        except KddApiError as e:
+            self.resumo.setText(f"Erro: {e}")
+            return
+        cont = {"pendente": 0, "processando": 0, "processado": 0, "erro": 0}
+        self.tabela.setRowCount(0)
+        for f in fontes:
+            proc = f.get("status_proc", "")
+            cont[proc] = cont.get(proc, 0) + 1
+            r = self.tabela.rowCount()
+            self.tabela.insertRow(r)
+            self.tabela.setItem(r, 0, QTableWidgetItem(str(f.get("id"))))
+            self.tabela.setItem(r, 1, QTableWidgetItem(f.get("titulo") or ""))
+            self.tabela.setItem(r, 2, QTableWidgetItem(self._ICON.get(proc, proc)))
+            self.tabela.setItem(r, 3, QTableWidgetItem(f.get("status_aprovacao") or ""))
+            self.tabela.setItem(r, 4, QTableWidgetItem(str(f.get("criado_em") or "")))
+            if sel is not None and int(f.get("id")) == sel:
+                self.tabela.selectRow(r)
+        self.resumo.setText(
+            f"{len(fontes)} fonte(s)  ·  ⏳ {cont['pendente']} pendente(s)  ·  "
+            f"⚙ {cont['processando']} processando  ·  ✓ {cont['processado']} processado(s)  ·  "
+            f"⚠ {cont['erro']} erro(s)")
+
+    def _sel_id(self) -> int | None:
+        r = self.tabela.currentRow()
+        if r < 0:
+            return None
+        it = self.tabela.item(r, 0)
+        return int(it.text()) if it else None
+
+    def _moderar(self, aprovar: bool) -> None:
+        fid = self._sel_id()
+        if fid is None:
+            QMessageBox.information(self, "Fila", "Selecione uma fonte na tabela.")
+            return
+        try:
+            if aprovar:
+                self._client.aprovar_fonte(fid)
+            else:
+                self._client.reprovar_fonte(fid)
+        except KddApiError as e:
+            QMessageBox.warning(self, "Erro", str(e))
+            return
+        self._carregar()
 
 
 def main() -> int:

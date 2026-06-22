@@ -150,3 +150,9 @@ class KddClient:
 
     def criar_area(self, nome: str, parent_id: int | None = None) -> dict[str, Any]:
         return self._escrita("POST", "/areas", {"nome": nome, "parent_id": parent_id})
+
+    def aprovar_fonte(self, fonte_id: int) -> dict[str, Any]:
+        return self._escrita("POST", f"/fontes/{fonte_id}/aprovar")
+
+    def reprovar_fonte(self, fonte_id: int) -> dict[str, Any]:
+        return self._escrita("POST", f"/fontes/{fonte_id}/reprovar")
