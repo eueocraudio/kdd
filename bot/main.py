@@ -26,7 +26,9 @@ def main() -> int:
     parser.add_argument("--intervalo", type=int, default=60, help="segundos entre varreduras no modo loop")
     parser.add_argument(
         "--backend",
-        choices=["auto", "claude", "ollama", "cli"],
+        # TEMPORÁRIO: Claude (claude/cli) desativado — só Ollama por enquanto.
+        # Para reativar, restaure as escolhas ["auto", "claude", "ollama", "cli"].
+        choices=["auto", "ollama"],
         help="backend de IA (sobrepõe KDD_IA_BACKEND; padrão: o do ambiente/~/.env)",
     )
     parser.add_argument(

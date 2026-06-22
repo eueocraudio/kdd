@@ -34,14 +34,14 @@ class IAFacade:
             # ou KDD_IA_BACKEND.
             escolha = "ollama"
 
-        if escolha == "claude":
-            from .claude_backend import ClaudeBackend
-            return IAFacade(ClaudeBackend(config.anthropic_api_key, config.claude_model))
+        # TEMPORÁRIO: Claude (backends 'claude' e 'cli') está desativado — só Ollama
+        # por enquanto. Para reativar, restaure os ramos 'claude'/'cli' abaixo.
+        if escolha in ("claude", "cli"):
+            raise RuntimeError(
+                f"Backend {escolha!r} desativado temporariamente — use 'ollama' "
+                "(ou 'auto'). Ajuste KDD_IA_BACKEND ou --backend."
+            )
         if escolha == "ollama":
             from .ollama_backend import OllamaBackend
             return IAFacade(OllamaBackend(config.ollama_url, config.ollama_model))
-        if escolha == "cli":
-            # usa o Claude Code (CLI `claude`) — sem precisar de ANTHROPIC_API_KEY
-            from .cli_backend import CliBackend
-            return IAFacade(CliBackend(config.claude_model))
         raise RuntimeError(f"Backend de IA desconhecido: {config.backend!r}")

@@ -78,12 +78,14 @@ Os venvs já existem em `bot/.venv` e `desktop/.venv` (gitignorados). Para recri
 ## Fachada de IA (`bot/kdd_bot/ia/`)
 
 `IAFacade.a_partir_de(config)` escolhe o backend por `KDD_IA_BACKEND`:
-- `claude` — `ClaudeBackend`, nuvem, extração estruturada via *tool use* forçado (`tool_choice`), padrão `claude-sonnet-4-6`. Use para a extração que importa.
 - `ollama` — `OllamaBackend`, local, HTTP com `format=json`. Modelo `aravhawk/qwen3.5-opus-4.6` é um **Qwen 3.5**, NÃO um Claude apesar do nome da imagem. Lento em CPU (máquina-alvo sem GPU).
-- `cli` — `CliBackend`, usa o CLI `claude` em modo `-p --json-schema` para testar sem `ANTHROPIC_API_KEY` própria. **Consome crédito do Claude Code.**
-- `auto` (padrão) — resolve **sempre** para `ollama` (local, sem custo). **Nunca** escolhe um backend pago sozinho; Claude (`cli`/`claude`) só roda se selecionado explicitamente.
+- `auto` (padrão) — resolve **sempre** para `ollama` (local, sem custo).
+- `claude` — `ClaudeBackend`, nuvem, *tool use* forçado, padrão `claude-sonnet-4-6`. **DESATIVADO temporariamente** (ver abaixo).
+- `cli` — `CliBackend`, usa o CLI `claude` em modo `-p --json-schema` sem `ANTHROPIC_API_KEY` própria. **Consome crédito do Claude Code. DESATIVADO temporariamente** (ver abaixo).
 
-**Proteção de crédito** (em `main.py`): backends pagos (`cli`/`claude`) logam um WARNING e, sem `--max-fontes`, limitam a **1 fonte por execução**. Flags: `--backend {auto,claude,ollama,cli}` sobrepõe `KDD_IA_BACKEND`; `--max-fontes N` limita por execução (`0` = sem limite).
+⚠️ **TEMPORÁRIO: Claude desativado.** Os backends `claude` e `cli` estão bloqueados — `--backend` só aceita `{auto, ollama}` (`main.py`) e a fachada levanta `RuntimeError` se `KDD_IA_BACKEND` vier como `claude`/`cli` (`facade.py`). Para reativar, restaure os ramos e as escolhas marcados com o comentário `TEMPORÁRIO` nesses dois arquivos.
+
+**Proteção de crédito** (em `main.py`, inerte enquanto o Claude está desativado, mas mantida para a reativação): backends pagos (`cli`/`claude`) logam um WARNING e, sem `--max-fontes`, limitam a **1 fonte por execução**. Flags: `--backend {auto,ollama}` sobrepõe `KDD_IA_BACKEND`; `--max-fontes N` limita por execução (`0` = sem limite).
 
 Todos os backends partilham `schema.py` (`MAPA_SCHEMA`, `SYSTEM`, `instrucao_usuario`) e a saída passa por `normalizar()`. **Ao adicionar/alterar um backend, o output tem que casar com `MAPA_SCHEMA`** (`{areas, conceitos[rotulo,sentido,areas], proposicoes[origem_rotulo,relacao,destino_rotulo,destino_sentido?]}`), que por sua vez espelha o payload da API.
 

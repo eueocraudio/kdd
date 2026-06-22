@@ -1,9 +1,10 @@
 # Como rodar (estado atual)
 
-Tudo já está instalado e validado. Há **três** formas de dar IA ao bot: o **CLI do
-Claude** (roda hoje, sem chave própria), a **API da Anthropic** (precisa de
-`ANTHROPIC_API_KEY`) e o **Ollama** local (offline, sem custo). Escolha o método com
-`--backend` ou `KDD_IA_BACKEND`.
+Tudo já está instalado e validado.
+
+> ⚠️ **TEMPORÁRIO:** os backends do **Claude** (`claude` via API e `cli` via Claude Code)
+> estão **desativados**. Por enquanto o bot só usa o **Ollama** local (offline, sem custo).
+> Os trechos sobre o Claude abaixo ficam como referência para quando forem reativados.
 
 ## Pré-requisitos já prontos
 - `bot/.venv` — dependências instaladas (`anthropic`, `pypdf`, `requests`).
@@ -11,35 +12,19 @@ Claude** (roda hoje, sem chave própria), a **API da Anthropic** (precisa de
 - `~/.env` — já tem `KDD_APP_URL`, `KDD_TOKEN_OPERADOR`/`_VALIDADOR`, credenciais de banco/SSH.
 - API em produção no ar.
 - PDF de exemplo: `bot/exemplos/botafogo.pdf` (gerável com `bot/exemplos/gerar_pdf_exemplo.py`).
+- Ollama rodando e o modelo baixado (ver seção abaixo).
 
-## Rodar AGORA, sem chave (Claude pela linha de comando)
-Se o CLI `claude` (Claude Code) estiver instalado e logado nesta máquina, o bot roda
-sem `ANTHROPIC_API_KEY` — reaproveita essa sessão:
-
-```bash
-cd bot
-.venv/bin/python main.py --backend cli            # uma passada nas pendentes
-.venv/bin/python main.py --backend cli --loop      # fica observando
-```
-
-> **Atenção: consome crédito do Claude Code.** Por isso, em backend pago (`cli`/`claude`)
-> o bot avisa e, **sem `--max-fontes`, processa no máximo 1 fonte por execução**. Use
-> `--max-fontes N` para mais (ou `--max-fontes 0` para sem limite).
-
-## Quando a chave chegar (API da Anthropic)
-Acrescente ao `~/.env` (NÃO sobrescreva as outras chaves):
-
-```
-ANTHROPIC_API_KEY=sk-ant-...
-```
-
-E selecione o backend explicitamente (o `auto` **não** escolhe um pago sozinho):
+## Rodar AGORA (Ollama local, sem chave)
+É o que o `auto` usa por padrão. Com o Ollama no ar e o modelo baixado:
 
 ```bash
 cd bot
-.venv/bin/python main.py --backend claude          # usa claude-sonnet-4-6 via API
-.venv/bin/python main.py --backend claude --max-fontes 0   # sem limite por execução
+.venv/bin/python main.py                       # uma passada (auto ⇒ ollama)
+.venv/bin/python main.py --backend ollama      # explícito
+.venv/bin/python main.py --backend ollama --loop   # fica observando
 ```
+
+É lento em CPU (máquina-alvo sem GPU), mas dispensa qualquer chave e não consome crédito.
 
 ## Teste ponta a ponta do bot
 Faz tudo numa tacada: upload do PDF de exemplo → roda o bot uma vez → imprime conceitos
@@ -48,16 +33,7 @@ aprovar (`POST /fontes/{id}/aprovar`).
 
 ```bash
 cd bot
-# escolha o método de IA pela env (o script lê KDD_IA_BACKEND):
-KDD_IA_BACKEND=cli .venv/bin/python exemplos/teste_ponta_a_ponta.py     # sem chave
-# ANTHROPIC_API_KEY=sk-ant-... KDD_IA_BACKEND=claude .venv/bin/python exemplos/teste_ponta_a_ponta.py
-```
-
-## Bot em produção contínua
-```bash
-cd bot
-.venv/bin/python main.py                      # padrão: auto ⇒ ollama (local, sem custo)
-.venv/bin/python main.py --backend cli --loop  # contínuo via Claude CLI (pago; cap de 1/ciclo)
+KDD_IA_BACKEND=ollama .venv/bin/python exemplos/teste_ponta_a_ponta.py
 ```
 
 ## Cliente desktop (consulta, somente leitura)
@@ -66,7 +42,25 @@ cd desktop
 .venv/bin/python main.py
 ```
 
-## Alternativa offline (sem chave): Ollama
-É o que o `auto` usa por padrão. Com o Ollama rodando e o modelo baixado, basta
-`--backend ollama` (ou `KDD_IA_BACKEND=ollama`). É lento em CPU (máquina-alvo sem GPU),
-mas dispensa qualquer chave e não consome crédito.
+## Ollama: instalação do modelo
+Com o Ollama rodando, baixe o modelo configurado em `KDD_IA_OLLAMA_MODEL` (ou o padrão).
+O bot fala com ele via HTTP (`KDD_IA_OLLAMA_URL`).
+
+---
+
+## (Desativado) Claude — reativação futura
+Quando o Claude voltar a ser permitido, restaure os ramos `claude`/`cli` em
+`bot/kdd_bot/ia/facade.py` e as escolhas de `--backend` em `bot/main.py` (procure pelos
+comentários `TEMPORÁRIO`). Aí valem novamente:
+
+```bash
+cd bot
+# CLI do Claude Code (sem ANTHROPIC_API_KEY própria; reaproveita a sessão local):
+.venv/bin/python main.py --backend cli
+# API da Anthropic (exige ANTHROPIC_API_KEY no ~/.env):
+.venv/bin/python main.py --backend claude          # usa claude-sonnet-4-6 via API
+```
+
+> **Atenção: consomem crédito.** Em backend pago (`cli`/`claude`) o bot avisa e, **sem
+> `--max-fontes`, processa no máximo 1 fonte por execução**. Use `--max-fontes N` para
+> mais (ou `--max-fontes 0` para sem limite). O `auto` **nunca** escolhe um pago sozinho.
