@@ -148,7 +148,14 @@ class ConceitoNode(QGraphicsItem):
         return self.scenePos()
 
     def itemChange(self, change, value):  # noqa: ANN001
-        if change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged:
+        if change == QGraphicsItem.GraphicsItemChange.ItemPositionChange and self.scene() is not None:
+            # mantém o nó dentro dos limites (borda) do diagrama
+            sr = self.scene().sceneRect()
+            if sr.isValid() and sr.width() > self.w and sr.height() > self.h:
+                x = min(max(value.x(), sr.left() + self.w / 2), sr.right() - self.w / 2)
+                y = min(max(value.y(), sr.top() + self.h / 2), sr.bottom() - self.h / 2)
+                value = QPointF(x, y)
+        elif change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged:
             for e in self.edges:
                 e.adjust()
         return super().itemChange(change, value)
@@ -235,6 +242,32 @@ class MapaView(QGraphicsView):
     def wheelEvent(self, ev) -> None:  # noqa: ANN001
         fator = 1.15 if ev.angleDelta().y() > 0 else 1 / 1.15
         self.scale(fator, fator)
+
+    def drawBackground(self, painter, rect) -> None:  # noqa: ANN001
+        """Folha do diagrama: fundo cinza fora, área branca com grade e borda dentro."""
+        sr = self.sceneRect()
+        painter.fillRect(rect, QColor("#eef1f5"))   # fora dos limites
+        painter.fillRect(sr, QColor("#ffffff"))      # a "folha" (limites do diagrama)
+        # grade
+        passo = 40.0
+        caneta = QPen(QColor("#e2e8f0"))
+        caneta.setCosmetic(True)
+        painter.setPen(caneta)
+        x = sr.left() - (sr.left() % passo)
+        while x <= sr.right():
+            painter.drawLine(QPointF(x, sr.top()), QPointF(x, sr.bottom()))
+            x += passo
+        y = sr.top() - (sr.top() % passo)
+        while y <= sr.bottom():
+            painter.drawLine(QPointF(sr.left(), y), QPointF(sr.right(), y))
+            y += passo
+        # borda do diagrama
+        borda = QPen(QColor("#64748b"))
+        borda.setWidth(2)
+        borda.setCosmetic(True)
+        painter.setPen(borda)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRect(sr)
 
     def _no_em(self, pos) -> ConceitoNode | None:  # noqa: ANN001
         for it in self.items(pos):
@@ -500,7 +533,6 @@ class MapaDialog(QDialog):
 
         self._posicionar(edges_ids, foco_id)
         self.view.set_modo_conectar(self._b_conectar.isChecked())
-        cena.setSceneRect(cena.itemsBoundingRect().adjusted(-100, -100, 100, 100))
         self._ajustar()
         n_c, n_p = len(self._nodes), len(edges_ids)
         self.setWindowTitle(f"Mapa Conceitual — {titulo}  ({n_c} conceitos, {n_p} proposições)")
@@ -509,20 +541,39 @@ class MapaDialog(QDialog):
         salvos = self._pos_salvas()
         sizes = {cid: (no.w, no.h) for cid, no in self._nodes.items()}
         layout = _layout_hierarquico(list(self._nodes.keys()), edges, sizes)
-        for cid, no in self._nodes.items():
+        finais: dict[int, tuple[float, float]] = {}
+        for cid in self._nodes:
             if str(cid) in salvos:
-                x, y = salvos[str(cid)]
+                finais[cid] = tuple(salvos[str(cid)])  # type: ignore[assignment]
             else:
-                x, y = layout.get(cid, (0.0, 0.0))
-            no.setPos(x, y)
+                finais[cid] = layout.get(cid, (0.0, 0.0))
+        # define os LIMITES do diagrama (a "folha") antes de posicionar, para que o
+        # nó respeite a borda; depois aplica as posições (já dentro dos limites).
+        self._definir_limites(finais)
+        for cid, (x, y) in finais.items():
+            self._nodes[cid].setPos(x, y)
         for no in self._nodes.values():
             for e in no.edges:
                 e.adjust()
 
+    def _definir_limites(self, finais: dict[int, tuple[float, float]]) -> None:
+        margem = 90.0
+        if finais:
+            minx = min(x - self._nodes[c].w / 2 for c, (x, _y) in finais.items())
+            maxx = max(x + self._nodes[c].w / 2 for c, (x, _y) in finais.items())
+            miny = min(y - self._nodes[c].h / 2 for c, (_x, y) in finais.items())
+            maxy = max(y + self._nodes[c].h / 2 for c, (_x, y) in finais.items())
+        else:
+            minx = miny = 0.0
+            maxx, maxy = 600.0, 400.0
+        larg = max(maxx - minx + 2 * margem, 700.0)
+        alt = max(maxy - miny + 2 * margem, 480.0)
+        self.view.scene().setSceneRect(minx - margem, miny - margem, larg, alt)
+
     def _ajustar(self) -> None:
-        r = self.view.scene().itemsBoundingRect()
-        if not r.isEmpty():
-            self.view.fitInView(r.adjusted(-40, -40, 40, 40), Qt.AspectRatioMode.KeepAspectRatio)
+        sr = self.view.sceneRect()
+        if sr.isValid() and not sr.isEmpty():
+            self.view.fitInView(sr, Qt.AspectRatioMode.KeepAspectRatio)
 
     # ── posições persistidas ──
     def _chave_pos(self) -> str:
