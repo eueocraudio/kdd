@@ -7,12 +7,17 @@ from typing import Any
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QApplication,
+    QComboBox,
     QDialogButtonBox,
     QDialog,
+    QGroupBox,
     QHBoxLayout,
     QHeaderView,
+    QInputDialog,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QMessageBox,
     QPushButton,
@@ -85,7 +90,23 @@ class MainWindow(QMainWindow):
         atualizar.clicked.connect(self._recarregar)
         barra.addWidget(atualizar)
 
-        self.statusBar().showMessage("Pronto.")
+        # Ações de edição — só quando há token de validador (perfil de curadoria)
+        if self._client.pode_editar():
+            barra.addSeparator()
+            b_novo = QPushButton("＋ Conceito")
+            b_novo.clicked.connect(self._novo_conceito)
+            barra.addWidget(b_novo)
+            b_editar = QPushButton("✎ Editar conceito")
+            b_editar.clicked.connect(self._editar_conceito_atual)
+            barra.addWidget(b_editar)
+            b_area = QPushButton("＋ Área")
+            b_area.clicked.connect(self._nova_area)
+            barra.addWidget(b_area)
+            self.statusBar().showMessage("Pronto. (modo edição disponível — validador)")
+        else:
+            self.statusBar().showMessage("Pronto. (somente leitura — sem token de validador)")
+
+        self._conceito_atual: int | None = None
 
     # ── ações ──
     def _recarregar(self) -> None:
@@ -145,7 +166,48 @@ class MainWindow(QMainWindow):
         except KddApiError as e:
             self._erro(str(e))
             return
+        self._conceito_atual = conceito_id
         self.detalhe.setHtml(_html_conceito(c))
+
+    # ── ações de edição ──
+    def _novo_conceito(self) -> None:
+        sentido, ok = QInputDialog.getText(self, "Novo conceito", "Sentido (identidade do conceito):")
+        if not ok or not sentido.strip():
+            return
+        rotulo, ok = QInputDialog.getText(self, "Novo conceito", "Rótulo principal:")
+        if not ok or not rotulo.strip():
+            return
+        areas_txt, ok = QInputDialog.getText(self, "Novo conceito", "Áreas (separadas por vírgula, opcional):")
+        areas = [a.strip() for a in areas_txt.split(",") if a.strip()] if ok else []
+        try:
+            r = self._client.criar_conceito(sentido.strip(), rotulo.strip(), areas)
+        except KddApiError as e:
+            self._erro(str(e))
+            return
+        self._listar_conceitos()
+        self._mostrar_detalhe(int(r["conceito"]["id"]))
+        self.statusBar().showMessage(f"Conceito #{r['conceito']['id']} criado.")
+
+    def _editar_conceito_atual(self) -> None:
+        if not self._conceito_atual:
+            QMessageBox.information(self, "Editar", "Selecione um conceito primeiro.")
+            return
+        dlg = ConceitoEditorDialog(self._client, self._conceito_atual, self)
+        dlg.exec()
+        self._listar_conceitos()
+        self._mostrar_detalhe(self._conceito_atual)
+
+    def _nova_area(self) -> None:
+        nome, ok = QInputDialog.getText(self, "Nova área", "Nome da área:")
+        if not ok or not nome.strip():
+            return
+        try:
+            self._client.criar_area(nome.strip())
+        except KddApiError as e:
+            self._erro(str(e))
+            return
+        self._carregar_areas()
+        self.statusBar().showMessage(f"Área '{nome.strip()}' criada.")
 
     def _abrir_constelacao(self) -> None:
         try:
@@ -244,6 +306,236 @@ def _html_constelacao(d: dict[str, Any]) -> str:
     else:
         out.append("<p><i>Nenhum homônimo ainda.</i></p>")
     return "\n".join(out)
+
+
+class EscolherConceitoDialog(QDialog):
+    """Busca e seleciona um conceito (para destino de proposição, merge, etc.)."""
+
+    def __init__(self, client: KddClient, pai: QWidget | None = None) -> None:
+        super().__init__(pai)
+        self._client = client
+        self.escolhido: int | None = None
+        self.setWindowTitle("Escolher conceito")
+        self.resize(460, 420)
+        layout = QVBoxLayout(self)
+        self.busca = QLineEdit(placeholderText="Buscar por rótulo e Enter…")
+        self.busca.returnPressed.connect(self._buscar)
+        self.lista = QListWidget()
+        self.lista.itemDoubleClicked.connect(lambda _i: self._confirmar())
+        layout.addWidget(self.busca)
+        layout.addWidget(self.lista, 1)
+        botoes = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        botoes.accepted.connect(self._confirmar)
+        botoes.rejected.connect(self.reject)
+        layout.addWidget(botoes)
+        self._buscar()
+
+    def _buscar(self) -> None:
+        self.lista.clear()
+        try:
+            conceitos = self._client.conceitos(q=self.busca.text().strip() or None)
+        except KddApiError as e:
+            QMessageBox.warning(self, "Erro", str(e))
+            return
+        for c in conceitos:
+            it = QListWidgetItem(f"#{c['id']} — {c.get('rotulos') or ''}  ({c.get('sentido') or ''})")
+            it.setData(Qt.ItemDataRole.UserRole, int(c["id"]))
+            self.lista.addItem(it)
+
+    def _confirmar(self) -> None:
+        it = self.lista.currentItem()
+        if it:
+            self.escolhido = int(it.data(Qt.ItemDataRole.UserRole))
+            self.accept()
+
+
+class ConceitoEditorDialog(QDialog):
+    """Editor de um conceito: sentido, rótulos, áreas, proposições, merge e split."""
+
+    def __init__(self, client: KddClient, conceito_id: int, pai: QWidget | None = None) -> None:
+        super().__init__(pai)
+        self._client = client
+        self._cid = conceito_id
+        self.setWindowTitle(f"Editar conceito #{conceito_id}")
+        self.resize(640, 680)
+        self._montar()
+        self._carregar()
+
+    def _montar(self) -> None:
+        layout = QVBoxLayout(self)
+
+        # Sentido
+        gs = QGroupBox("Sentido (identidade)")
+        ls = QHBoxLayout(gs)
+        self.sentido = QLineEdit()
+        b_sentido = QPushButton("Salvar")
+        b_sentido.clicked.connect(self._salvar_sentido)
+        ls.addWidget(self.sentido, 1)
+        ls.addWidget(b_sentido)
+        layout.addWidget(gs)
+
+        # Rótulos
+        gr = QGroupBox("Rótulos")
+        lr = QVBoxLayout(gr)
+        self.rotulos = QListWidget()
+        lr.addWidget(self.rotulos)
+        br = QHBoxLayout()
+        for txt, fn in [("Adicionar", self._add_rotulo), ("Tornar principal", self._principal),
+                        ("Remover", self._rem_rotulo)]:
+            b = QPushButton(txt); b.clicked.connect(fn); br.addWidget(b)
+        lr.addLayout(br)
+        layout.addWidget(gr)
+
+        # Áreas
+        ga = QGroupBox("Áreas")
+        la = QVBoxLayout(ga)
+        self.areas = QListWidget()
+        la.addWidget(self.areas)
+        ba = QHBoxLayout()
+        for txt, fn in [("Adicionar área", self._add_area), ("Remover área", self._rem_area)]:
+            b = QPushButton(txt); b.clicked.connect(fn); ba.addWidget(b)
+        la.addLayout(ba)
+        layout.addWidget(ga)
+
+        # Proposições (origem)
+        gp = QGroupBox("Proposições (este conceito como origem)")
+        lp = QVBoxLayout(gp)
+        self.props = QTableWidget(0, 3)
+        self.props.setHorizontalHeaderLabels(["Relação", "Destino", "Certeza"])
+        self.props.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.props.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.props.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        lp.addWidget(self.props)
+        bp = QHBoxLayout()
+        for txt, fn in [("Nova proposição", self._nova_prop), ("Editar", self._editar_prop),
+                        ("Remover", self._rem_prop)]:
+            b = QPushButton(txt); b.clicked.connect(fn); bp.addWidget(b)
+        lp.addLayout(bp)
+        layout.addWidget(gp, 1)
+
+        # Operações estruturais + fechar
+        rod = QHBoxLayout()
+        b_merge = QPushButton("Mesclar outro AQUI…")
+        b_merge.clicked.connect(self._merge)
+        b_split = QPushButton("Desambiguar (split)…")
+        b_split.clicked.connect(self._split)
+        rod.addWidget(b_merge); rod.addWidget(b_split); rod.addStretch(1)
+        fechar = QPushButton("Fechar"); fechar.clicked.connect(self.accept)
+        rod.addWidget(fechar)
+        layout.addLayout(rod)
+
+    def _carregar(self) -> None:
+        try:
+            c = self._client.conceito(self._cid)
+        except KddApiError as e:
+            QMessageBox.warning(self, "Erro", str(e)); return
+        self.sentido.setText(c.get("sentido") or "")
+        self.rotulos.clear()
+        for r in c.get("rotulos", []):
+            txt = f"{r['texto']}  ★" if r.get("principal") else r["texto"]
+            it = QListWidgetItem(txt); it.setData(Qt.ItemDataRole.UserRole, int(r["id"]))
+            self.rotulos.addItem(it)
+        self.areas.clear()
+        for a in c.get("areas", []):
+            it = QListWidgetItem(a["nome"]); it.setData(Qt.ItemDataRole.UserRole, int(a["id"]))
+            self.areas.addItem(it)
+        self.props.setRowCount(0)
+        for p in c.get("proposicoes_origem", []):
+            linha = self.props.rowCount(); self.props.insertRow(linha)
+            self.props.setItem(linha, 0, QTableWidgetItem(p.get("relacao") or ""))
+            dest = p.get("destino", {})
+            it_d = QTableWidgetItem(dest.get("rotulo") or "")
+            it_d.setData(Qt.ItemDataRole.UserRole, (int(p["proposicao_id"]), int(dest.get("id") or 0)))
+            self.props.setItem(linha, 1, it_d)
+            self.props.setItem(linha, 2, QTableWidgetItem(str(p.get("fontes_aprovadas", 0))))
+
+    def _executar(self, fn) -> None:
+        try:
+            fn()
+        except KddApiError as e:
+            QMessageBox.warning(self, "Erro", str(e)); return
+        self._carregar()
+
+    def _salvar_sentido(self) -> None:
+        novo = self.sentido.text().strip()
+        if novo:
+            self._executar(lambda: self._client.editar_conceito(self._cid, novo))
+
+    # rótulos
+    def _add_rotulo(self) -> None:
+        texto, ok = QInputDialog.getText(self, "Rótulo", "Novo rótulo:")
+        if ok and texto.strip():
+            self._executar(lambda: self._client.add_rotulo(self._cid, texto.strip()))
+
+    def _principal(self) -> None:
+        it = self.rotulos.currentItem()
+        if it:
+            self._executar(lambda: self._client.rotulo_principal(int(it.data(Qt.ItemDataRole.UserRole))))
+
+    def _rem_rotulo(self) -> None:
+        it = self.rotulos.currentItem()
+        if it:
+            self._executar(lambda: self._client.remover_rotulo(int(it.data(Qt.ItemDataRole.UserRole))))
+
+    # áreas
+    def _add_area(self) -> None:
+        nome, ok = QInputDialog.getText(self, "Área", "Nome da área:")
+        if ok and nome.strip():
+            self._executar(lambda: self._client.add_area_conceito(self._cid, nome.strip()))
+
+    def _rem_area(self) -> None:
+        it = self.areas.currentItem()
+        if it:
+            self._executar(lambda: self._client.rem_area_conceito(self._cid, int(it.data(Qt.ItemDataRole.UserRole))))
+
+    # proposições
+    def _nova_prop(self) -> None:
+        relacao, ok = QInputDialog.getText(self, "Proposição", "Relação (verbo):")
+        if not ok or not relacao.strip():
+            return
+        esc = EscolherConceitoDialog(self._client, self)
+        if esc.exec() and esc.escolhido:
+            self._executar(lambda: self._client.criar_proposicao(self._cid, relacao.strip(), esc.escolhido))
+
+    def _editar_prop(self) -> None:
+        linha = self.props.currentRow()
+        if linha < 0:
+            return
+        prop_id, dest_id = self.props.item(linha, 1).data(Qt.ItemDataRole.UserRole)
+        relacao, ok = QInputDialog.getText(self, "Editar proposição", "Relação:",
+                                           text=self.props.item(linha, 0).text())
+        if not ok or not relacao.strip():
+            return
+        self._executar(lambda: self._client.editar_proposicao(prop_id, self._cid, relacao.strip(), dest_id))
+
+    def _rem_prop(self) -> None:
+        linha = self.props.currentRow()
+        if linha < 0:
+            return
+        prop_id, _ = self.props.item(linha, 1).data(Qt.ItemDataRole.UserRole)
+        if QMessageBox.question(self, "Remover", "Remover esta proposição?") == QMessageBox.StandardButton.Yes:
+            self._executar(lambda: self._client.remover_proposicao(prop_id))
+
+    # estruturais
+    def _merge(self) -> None:
+        esc = EscolherConceitoDialog(self._client, self)
+        if esc.exec() and esc.escolhido and esc.escolhido != self._cid:
+            if QMessageBox.question(
+                self, "Mesclar",
+                f"Mesclar o conceito #{esc.escolhido} DENTRO de #{self._cid}? (o outro será removido)"
+            ) == QMessageBox.StandardButton.Yes:
+                self._executar(lambda: self._client.merge_conceito(self._cid, esc.escolhido))
+
+    def _split(self) -> None:
+        sentido, ok = QInputDialog.getText(self, "Desambiguar", "Sentido do conceito novo:")
+        if not ok or not sentido.strip():
+            return
+        rot_ids = [int(self.rotulos.item(i).data(Qt.ItemDataRole.UserRole))
+                   for i in range(self.rotulos.count()) if self.rotulos.item(i).isSelected()]
+        prop_ids = [self.props.item(l, 1).data(Qt.ItemDataRole.UserRole)[0]
+                    for l in range(self.props.rowCount())
+                    if self.props.item(l, 1) and self.props.item(l, 1).isSelected()]
+        self._executar(lambda: self._client.split_conceito(self._cid, sentido.strip(), rot_ids, prop_ids))
 
 
 def main() -> int:

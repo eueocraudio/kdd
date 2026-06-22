@@ -6,6 +6,19 @@
 > Itens **🟡 PENDENTE** precisam de decisão do idealizador.
 > Última atualização: 2026-06-22.
 
+> ## ✅ Status: implementado (1ª versão)
+> As **decisões recomendadas** desta spec foram implementadas e validadas localmente:
+> - **API** (`api/migrations/002_editor.sql` + `api/src/handlers/editor.php`): curadoria
+>   como fonte (origem `curadoria`, já aprovada), changesets de auditoria, e endpoints de
+>   escrita granular (proposições, conceitos, rótulos, áreas, **merge** e **split**),
+>   todos exigindo **perfil validador**.
+> - **Desktop** (`desktop/kdd_desktop/`): modo edição (visível só com `KDD_TOKEN_VALIDADOR`),
+>   editor de conceito (sentido/rótulos/áreas/proposições/merge/split), criar conceito e área.
+>
+> Validado contra um MySQL/PHP **locais**; **falta** rodar a migration e fazer deploy em
+> **produção** (Hostinger) — ação manual, ainda não executada. As decisões pendentes
+> abaixo foram resolvidas pelos defaults recomendados; reabra se quiser mudar.
+
 ---
 
 ## 1. Motivação

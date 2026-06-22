@@ -15,6 +15,7 @@ require APP_ROOT . '/src/db.php';
 require APP_ROOT . '/src/auth.php';
 require APP_ROOT . '/src/handlers/fontes.php';
 require APP_ROOT . '/src/handlers/consulta.php';
+require APP_ROOT . '/src/handlers/editor.php';
 
 kdd_load_env(APP_ROOT . '/.env');
 
@@ -82,6 +83,50 @@ if ($method === 'GET' && $path === '/proposicoes') {
 
 if ($method === 'GET' && $path === '/constelacao') {
     constelacao();
+}
+
+// --- Editor manual de mapas (escrita; exige perfil validador) ---
+if ($path === '/proposicoes' && $method === 'POST') {
+    proposicao_criar($auth);
+}
+if (preg_match('#^/proposicoes/(\d+)$#', $path, $m)) {
+    if ($method === 'PATCH')  { proposicao_editar($auth, (int) $m[1]); }
+    if ($method === 'DELETE') { proposicao_remover($auth, (int) $m[1]); }
+}
+
+if ($path === '/conceitos' && $method === 'POST') {
+    conceito_criar($auth);
+}
+if (preg_match('#^/conceitos/(\d+)$#', $path, $m) && $method === 'PATCH') {
+    conceito_editar($auth, (int) $m[1]);
+}
+if (preg_match('#^/conceitos/(\d+)/rotulos$#', $path, $m) && $method === 'POST') {
+    conceito_add_rotulo($auth, (int) $m[1]);
+}
+if (preg_match('#^/conceitos/(\d+)/areas$#', $path, $m) && $method === 'POST') {
+    conceito_add_area($auth, (int) $m[1]);
+}
+if (preg_match('#^/conceitos/(\d+)/areas/(\d+)$#', $path, $m) && $method === 'DELETE') {
+    conceito_rem_area($auth, (int) $m[1], (int) $m[2]);
+}
+if (preg_match('#^/conceitos/(\d+)/merge$#', $path, $m) && $method === 'POST') {
+    conceito_merge($auth, (int) $m[1]);
+}
+if (preg_match('#^/conceitos/(\d+)/split$#', $path, $m) && $method === 'POST') {
+    conceito_split($auth, (int) $m[1]);
+}
+
+if (preg_match('#^/rotulos/(\d+)$#', $path, $m)) {
+    if ($method === 'PATCH')  { rotulo_editar($auth, (int) $m[1]); }
+    if ($method === 'DELETE') { rotulo_remover($auth, (int) $m[1]); }
+}
+
+if ($path === '/areas' && $method === 'POST') {
+    area_criar($auth);
+}
+if (preg_match('#^/areas/(\d+)$#', $path, $m)) {
+    if ($method === 'PATCH')  { area_editar($auth, (int) $m[1]); }
+    if ($method === 'DELETE') { area_remover($auth, (int) $m[1]); }
 }
 
 json_error("Rota não encontrada: {$method} {$path}", 404);

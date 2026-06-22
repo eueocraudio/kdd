@@ -17,6 +17,10 @@
 | 4 | Curadoria | Fila de fontes pendentes no PySide; aprovar/reprovar (cascata) | 1, 2, 3 |
 | 5 | Versionamento & refinamentos | Diffs/changesets; desambiguação; pontes interdisciplinares | 1–4 |
 
+> **Editor Manual de Mapas** (cruza M4/M5) — 1ª versão **implementada** (API + desktop),
+> validada localmente; falta deploy em produção. Spec e detalhes em
+> [`editor-mapas.md`](editor-mapas.md).
+
 **Princípio de fatiamento:** fechar o Marco 1 entrega um armazém funcional e testável por
 HTTP **antes** de qualquer cliente ou IA. Bot e PySide podem então ser desenvolvidos em
 paralelo contra a mesma API.

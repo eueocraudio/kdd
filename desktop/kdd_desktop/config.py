@@ -31,6 +31,7 @@ def _parse_env_file(path: Path) -> dict[str, str]:
 class Config:
     base_url: str
     token: str
+    token_validador: str = ""   # exigido só pelo editor (escrita); vazio = só leitura
 
     @staticmethod
     def carregar() -> "Config":
@@ -48,10 +49,12 @@ class Config:
         base_url = pega("KDD_APP_URL").rstrip("/")
         # consulta aceita qualquer token válido; preferimos o de operador
         token = pega("KDD_TOKEN", "KDD_TOKEN_OPERADOR", "KDD_TOKEN_VALIDADOR")
+        # o editor (escrita) exige perfil validador (spec §6)
+        token_validador = pega("KDD_TOKEN_VALIDADOR")
 
         if not base_url or not token:
             raise RuntimeError(
                 "Defina KDD_APP_URL e um token (KDD_TOKEN_OPERADOR/VALIDADOR) "
                 "no ambiente ou em ~/.env."
             )
-        return Config(base_url=base_url, token=token)
+        return Config(base_url=base_url, token=token, token_validador=token_validador)
