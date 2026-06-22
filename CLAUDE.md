@@ -78,7 +78,7 @@ Os venvs já existem em `bot/.venv` e `desktop/.venv` (gitignorados). Para recri
 ## Fachada de IA (`bot/kdd_bot/ia/`)
 
 `IAFacade.a_partir_de(config)` escolhe o backend por `KDD_IA_BACKEND`:
-- `ollama` — `OllamaBackend`, local, HTTP com `format=json`. Modelo `aravhawk/qwen3.5-opus-4.6` é um **Qwen 3.5**, NÃO um Claude apesar do nome da imagem. Lento em CPU (máquina-alvo sem GPU).
+- `ollama` — `OllamaBackend`, local, HTTP com `format=json`. Modelo padrão `qwen2.5:7b-instruct` (~4.7 GB), dimensionado para a máquina-alvo (i5-6200U, ~11 GB RAM, sem GPU). Lento em CPU (~4–6 min/extração). Ver [[maquina-ollama-local]].
 - `auto` (padrão) — resolve **sempre** para `ollama` (local, sem custo).
 - `claude` — `ClaudeBackend`, nuvem, *tool use* forçado, padrão `claude-sonnet-4-6`. **DESATIVADO temporariamente** (ver abaixo).
 - `cli` — `CliBackend`, usa o CLI `claude` em modo `-p --json-schema` sem `ANTHROPIC_API_KEY` própria. **Consome crédito do Claude Code. DESATIVADO temporariamente** (ver abaixo).

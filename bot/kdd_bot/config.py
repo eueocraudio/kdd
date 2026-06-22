@@ -60,6 +60,6 @@ class Config:
             claude_model=pega("KDD_CLAUDE_MODEL", padrao="claude-sonnet-4-6"),
             anthropic_api_key=pega("ANTHROPIC_API_KEY", "KDD_ANTHROPIC_API_KEY"),
             ollama_url=pega("KDD_OLLAMA_URL", padrao="http://localhost:11434").rstrip("/"),
-            ollama_model=pega("KDD_OLLAMA_MODEL", padrao="aravhawk/qwen3.5-opus-4.6"),
+            ollama_model=pega("KDD_OLLAMA_MODEL", padrao="qwen2.5:7b-instruct"),
             max_chars_pdf=int(pega("KDD_MAX_CHARS_PDF", padrao="60000")),
         )
