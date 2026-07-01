@@ -142,6 +142,74 @@ function fontes_criar(array $auth): void
     ], 201);
 }
 
+// POST /fontes/texto — ingestão de TEXTO (não-PDF) com CONTEXTO, vinda de um site externo
+// (ex.: o cursohacker manda descrição + transcrição sob o contexto = nome do curso). Grava
+// o texto como um .txt no storage (o bot processa igual a um upload .txt) e cria a fonte
+// pendente. A ÁREA-RAIZ = contexto é criada/linkada JÁ aqui (o bot adiciona depois as áreas
+// achadas no texto; fonte_area é N–N). Idempotente por `ref` (ex.: "aula:<id>"): reenvio do
+// mesmo ref ATUALIZA o texto e reprocessa, sem duplicar.
+// Body JSON: { "contexto": "...", "texto": "...", "origem": "...", "ref": "..." }.
+function fontes_criar_texto(array $auth): void
+{
+    $body     = json_body();
+    $texto    = trim((string) ($body['texto'] ?? ''));
+    $contexto = trim((string) ($body['contexto'] ?? ''));
+    $origem   = trim((string) ($body['origem'] ?? ''));
+    $ref      = trim((string) ($body['ref'] ?? ''));
+    if ($texto === '') { json_error('Campo "texto" é obrigatório', 400); }
+    if (strlen($texto) > 2000000) { json_error('Texto grande demais (máx. 2 MB)', 413); }
+
+    $pdo = kdd_db();
+    $dir = kdd_pdf_dir();
+    if (!is_dir($dir) && !@mkdir($dir, 0775, true) && !is_dir($dir)) {
+        json_error('Não foi possível criar o diretório de storage', 500);
+    }
+    $titulo = $contexto !== '' ? $contexto : ('Texto ' . ($ref !== '' ? $ref : date('Ymd_His')));
+
+    // Idempotência por ref: se já existe fonte com este ref, ATUALIZA e reprocessa.
+    $existente = null;
+    if ($ref !== '') {
+        $s = $pdo->prepare("SELECT id, arquivo_caminho FROM fonte WHERE ref = ? LIMIT 1");
+        $s->execute([$ref]);
+        $existente = $s->fetch() ?: null;
+    }
+
+    if ($existente) {
+        $fonte_id = (int) $existente['id'];
+        @file_put_contents($dir . '/' . (string) $existente['arquivo_caminho'], $texto);
+        $pdo->prepare("UPDATE fonte SET titulo = ?, contexto = ?, status_proc = 'pendente' WHERE id = ?")
+            ->execute([$titulo, ($contexto !== '' ? $contexto : null), $fonte_id]);
+    } else {
+        $nome = date('Ymd_His') . '_' . bin2hex(random_bytes(6)) . '.txt';
+        if (@file_put_contents($dir . '/' . $nome, $texto) === false) {
+            json_error('Falha ao salvar o texto', 500);
+        }
+        $pdo->prepare(
+            "INSERT INTO fonte (titulo, arquivo_caminho, arquivo_hash, contexto, ref, status_proc, status_aprovacao)
+             VALUES (?, ?, NULL, ?, ?, 'pendente', 'pendente')"
+        )->execute([$titulo, $nome, ($contexto !== '' ? $contexto : null), ($ref !== '' ? $ref : null)]);
+        $fonte_id = (int) $pdo->lastInsertId();
+    }
+
+    // Área-raiz = contexto (ex.: nome do curso): cria/garante e linka à fonte.
+    if ($contexto !== '') {
+        $area_id = kdd_upsert_area($pdo, $contexto);
+        $pdo->prepare("INSERT IGNORE INTO fonte_area (fonte_id, area_id) VALUES (?, ?)")
+            ->execute([$fonte_id, $area_id]);
+    }
+
+    json_out([
+        'fonte' => [
+            'id'          => $fonte_id,
+            'titulo'      => $titulo,
+            'contexto'    => $contexto,
+            'ref'         => $ref,
+            'origem'      => $origem,
+            'status_proc' => 'pendente',
+        ],
+    ], $existente ? 200 : 202);
+}
+
 /** GET /fontes/{id}/arquivo  (download do PDF — usado pelo bot) */
 function fontes_baixar(int $id): void
 {

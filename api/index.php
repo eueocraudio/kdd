@@ -43,6 +43,11 @@ if ($path === '/fontes') {
     if ($method === 'POST') { fontes_criar($auth); }
 }
 
+// Ingestão de TEXTO (não-PDF) com contexto, de um site externo (ex.: cursohacker).
+if ($path === '/fontes/texto' && $method === 'POST') {
+    fontes_criar_texto($auth);
+}
+
 if (preg_match('#^/fontes/(\d+)$#', $path, $m)) {
     if ($method === 'GET')   { fontes_obter((int) $m[1]); }
     if ($method === 'PATCH') { fontes_atualizar((int) $m[1]); }
