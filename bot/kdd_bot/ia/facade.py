@@ -44,4 +44,11 @@ class IAFacade:
         if escolha == "ollama":
             from .ollama_backend import OllamaBackend
             return IAFacade(OllamaBackend(config.ollama_url, config.ollama_model))
+        if escolha == "rolhama":
+            # Extrai via o concentrador rolhama (bddphp -> ollama na .90), com format=json.
+            # Serializa com os outros consumidores do ollama (não colide no slot único).
+            from .rolhama_backend import RolhamaBackend
+            return IAFacade(RolhamaBackend(
+                config.rolhama_url, config.rolhama_key,
+                config.rolhama_channel, config.rolhama_model))
         raise RuntimeError(f"Backend de IA desconhecido: {config.backend!r}")

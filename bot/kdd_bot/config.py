@@ -32,6 +32,10 @@ class Config:
     anthropic_api_key: str
     ollama_url: str
     ollama_model: str
+    rolhama_url: str         # backend "rolhama": concentrador bddphp -> ollama (na .90)
+    rolhama_key: str
+    rolhama_channel: int
+    rolhama_model: str
     max_chars_pdf: int
     chars_por_secao: int     # >0 ativa extração por seções (0 = passada única)
     max_chars_total: int     # cap de segurança do texto total no modo seções
@@ -73,6 +77,10 @@ class Config:
             anthropic_api_key=pega("ANTHROPIC_API_KEY", "KDD_ANTHROPIC_API_KEY"),
             ollama_url=pega("KDD_OLLAMA_URL", padrao="http://localhost:11434").rstrip("/"),
             ollama_model=pega("KDD_OLLAMA_MODEL", padrao="qwen2.5:7b-instruct"),
+            rolhama_url=pega("ROLHAMA_BDD_URL", padrao="https://darkgoldenrod-gnat-566022.hostingersite.com").rstrip("/"),
+            rolhama_key=pega("ROLHAMA_BDD_KEY"),
+            rolhama_channel=pega_int("ROLHAMA_CHANNEL", "505"),
+            rolhama_model=pega("ROLHAMA_OLLAMA_MODEL", "KDD_OLLAMA_MODEL", padrao="qwen2.5:14b-instruct"),
             max_chars_pdf=pega_int("KDD_MAX_CHARS_PDF", "60000"),
             chars_por_secao=pega_int("KDD_CHARS_POR_SECAO", "0"),
             max_chars_total=pega_int("KDD_MAX_CHARS_TOTAL", "400000"),
