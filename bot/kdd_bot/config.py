@@ -50,6 +50,15 @@ class Config:
                     return arquivo[c]
             return padrao
 
+        def pega_int(chave: str, padrao: str) -> int:
+            bruto = pega(chave, padrao=padrao)
+            try:
+                return int(bruto)
+            except ValueError as e:
+                raise RuntimeError(
+                    f"Configuração inválida: {chave}={bruto!r} não é um inteiro."
+                ) from e
+
         base_url = pega("KDD_APP_URL").rstrip("/")
         # o bot age como OPERADOR (empurra mapas; quem aprova é o validador humano)
         token = pega("KDD_TOKEN_OPERADOR", "KDD_TOKEN")
@@ -64,8 +73,8 @@ class Config:
             anthropic_api_key=pega("ANTHROPIC_API_KEY", "KDD_ANTHROPIC_API_KEY"),
             ollama_url=pega("KDD_OLLAMA_URL", padrao="http://localhost:11434").rstrip("/"),
             ollama_model=pega("KDD_OLLAMA_MODEL", padrao="qwen2.5:7b-instruct"),
-            max_chars_pdf=int(pega("KDD_MAX_CHARS_PDF", padrao="60000")),
-            chars_por_secao=int(pega("KDD_CHARS_POR_SECAO", padrao="0")),
-            max_chars_total=int(pega("KDD_MAX_CHARS_TOTAL", padrao="400000")),
-            max_secoes=int(pega("KDD_MAX_SECOES", padrao="0")),
+            max_chars_pdf=pega_int("KDD_MAX_CHARS_PDF", "60000"),
+            chars_por_secao=pega_int("KDD_CHARS_POR_SECAO", "0"),
+            max_chars_total=pega_int("KDD_MAX_CHARS_TOTAL", "400000"),
+            max_secoes=pega_int("KDD_MAX_SECOES", "0"),
         )

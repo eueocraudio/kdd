@@ -130,7 +130,7 @@ function proposicao_criar(array $auth): void
         $pdo->commit();
     } catch (Throwable $e) {
         $pdo->rollBack();
-        json_error('Falha ao criar proposição: ' . $e->getMessage(), 500);
+        json_erro_interno($e, 'criar proposição');
     }
 
     json_out(['ok' => true, 'proposicao' => kdd_proposicao_view($pdo, $prop_id)], 201);
@@ -183,7 +183,7 @@ function proposicao_editar(array $auth, int $id): void
         $pdo->commit();
     } catch (Throwable $e) {
         $pdo->rollBack();
-        json_error('Falha ao editar proposição: ' . $e->getMessage(), 500);
+        json_erro_interno($e, 'editar proposição');
     }
 
     json_out(['ok' => true, 'proposicao' => kdd_proposicao_view($pdo, $novo_id)]);
@@ -214,7 +214,7 @@ function proposicao_remover(array $auth, int $id): void
         $pdo->commit();
     } catch (Throwable $e) {
         $pdo->rollBack();
-        json_error('Falha ao remover proposição: ' . $e->getMessage(), 500);
+        json_erro_interno($e, 'remover proposição');
     }
 
     json_out(['ok' => true, 'proposicao_removida' => $removida,
@@ -312,7 +312,7 @@ function conceito_criar(array $auth): void
         $pdo->commit();
     } catch (Throwable $e) {
         $pdo->rollBack();
-        json_error('Falha ao criar conceito: ' . $e->getMessage(), 500);
+        json_erro_interno($e, 'criar conceito');
     }
 
     json_out(['ok' => true, 'conceito' => kdd_conceito_resumo($pdo, $cid)], 201);
@@ -360,6 +360,13 @@ function conceito_add_rotulo(array $auth, int $id): void
         $pdo->prepare("UPDATE rotulo SET principal = 0 WHERE conceito_id = ?")->execute([$id]);
     }
     kdd_garantir_rotulo($pdo, $id, $texto, $principal);
+    if ($principal) {
+        // Se o rótulo JÁ existia, kdd_garantir_rotulo retorna cedo sem marcá-lo
+        // principal — o UPDATE acima zerou todos e o conceito ficaria sem principal.
+        // Garante explicitamente que este rótulo é o principal.
+        $pdo->prepare("UPDATE rotulo SET principal = 1 WHERE conceito_id = ? AND texto = ?")
+            ->execute([$id, $texto]);
+    }
     kdd_log_changeset($pdo, $auth, 'add_rotulo', 'conceito', $id, null, ['texto' => $texto, 'principal' => $principal]);
     json_out(['ok' => true, 'conceito' => kdd_conceito_resumo($pdo, $id)], 201);
 }
@@ -497,7 +504,7 @@ function conceito_merge(array $auth, int $id): void
         $pdo->commit();
     } catch (Throwable $e) {
         $pdo->rollBack();
-        json_error('Falha ao mesclar: ' . $e->getMessage(), 500);
+        json_erro_interno($e, 'mesclar conceito');
     }
 
     json_out(['ok' => true, 'conceito' => kdd_conceito_resumo($pdo, $id)]);
@@ -517,6 +524,14 @@ function kdd_reaponta_proposicoes(PDO $pdo, int $de, int $para): void
     foreach ($sel->fetchAll() as $p) {
         $no = (int) $p['conceito_origem']  === $de ? $para : (int) $p['conceito_origem'];
         $nd = (int) $p['conceito_destino'] === $de ? $para : (int) $p['conceito_destino'];
+
+        // Auto-laço resultante do merge (ex.: A→B com A mesclado em B vira B→B):
+        // proposição sem sentido — remove-a e às suas referências em vez de gravar.
+        if ($no === $nd) {
+            $pdo->prepare("DELETE FROM referencia WHERE proposicao_id = ?")->execute([(int) $p['id']]);
+            $pdo->prepare("DELETE FROM proposicao WHERE id = ?")->execute([(int) $p['id']]);
+            continue;
+        }
 
         $ex = $pdo->prepare(
             "SELECT id FROM proposicao WHERE conceito_origem = ? AND relacao = ? AND conceito_destino = ? AND id <> ? LIMIT 1"
@@ -571,6 +586,23 @@ function conceito_split(array $auth, int $id): void
             $pdo->prepare("UPDATE rotulo SET conceito_id = ?, principal = 0 WHERE id = ? AND conceito_id = ?")
                 ->execute([$novo, $rid, $id]);
         }
+        // A origem não pode ficar sem rótulo (mesma regra do rotulo_remover).
+        $rc = $pdo->prepare("SELECT COUNT(*) FROM rotulo WHERE conceito_id = ?");
+        $rc->execute([$id]);
+        if ((int) $rc->fetchColumn() < 1) {
+            $pdo->rollBack();
+            json_error('O split moveria todos os rótulos; a origem ficaria sem rótulo. Deixe ao menos um.', 409);
+        }
+        // Se o principal foi movido, promove um rótulo remanescente da origem.
+        $pp = $pdo->prepare("SELECT COUNT(*) FROM rotulo WHERE conceito_id = ? AND principal = 1");
+        $pp->execute([$id]);
+        if ((int) $pp->fetchColumn() === 0) {
+            $r0 = $pdo->prepare("SELECT id FROM rotulo WHERE conceito_id = ? ORDER BY id LIMIT 1");
+            $r0->execute([$id]);
+            if ($row0 = $r0->fetch()) {
+                $pdo->prepare("UPDATE rotulo SET principal = 1 WHERE id = ?")->execute([(int) $row0['id']]);
+            }
+        }
         if ($rot_princ !== '') {
             kdd_garantir_rotulo($pdo, $novo, $rot_princ, true);
         } else {
@@ -598,7 +630,7 @@ function conceito_split(array $auth, int $id): void
         $pdo->commit();
     } catch (Throwable $e) {
         $pdo->rollBack();
-        json_error('Falha ao desambiguar: ' . $e->getMessage(), 500);
+        json_erro_interno($e, 'desambiguar (split) conceito');
     }
 
     json_out(['ok' => true, 'origem' => kdd_conceito_resumo($pdo, $id),

@@ -74,8 +74,8 @@ class MainWindow(QMainWindow):
         self.tabela.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.tabela.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.tabela.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.tabela.cellClicked.connect(self._conceito_selecionado)
-        # também atualiza o detalhe ao navegar pelas setas do teclado
+        # currentCellChanged cobre mouse e teclado; evita a busca dupla do detalhe
+        # que ocorria ao conectar também o cellClicked (dois GET /conceitos/{id}).
         self.tabela.currentCellChanged.connect(self._linha_mudou)
 
         # Direita: detalhe

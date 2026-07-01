@@ -14,7 +14,9 @@ class KddApiError(RuntimeError):
 
 
 class KddClient:
-    def __init__(self, config: Config, timeout: float = 30.0) -> None:
+    def __init__(self, config: Config, timeout: tuple[float, float] = (10.0, 60.0)) -> None:
+        # timeout = (conexão, leitura): limita tanto o connect quanto respostas
+        # que travam no meio do corpo (evita pendurar indefinidamente).
         self._cfg = config
         self._timeout = timeout
         self._s = requests.Session()
@@ -23,12 +25,22 @@ class KddClient:
     def _url(self, caminho: str) -> str:
         return f"{self._cfg.base_url}{caminho}"
 
+    @staticmethod
+    def _corpo_json(r: requests.Response) -> dict[str, Any]:
+        """Decodifica o corpo como JSON; {} se vazio ou não-JSON (ex.: HTML de proxy)."""
+        if not r.content:
+            return {}
+        try:
+            data = r.json()
+        except ValueError:
+            return {}
+        return data if isinstance(data, dict) else {}
+
     def _ok(self, r: requests.Response) -> dict[str, Any]:
         if r.status_code >= 400:
-            ct = r.headers.get("content-type", "")
-            msg = r.json().get("erro") if ct.startswith("application/json") else r.text
+            msg = self._corpo_json(r).get("erro") or (r.text[:500] if r.text else "")
             raise KddApiError(f"HTTP {r.status_code}: {msg}")
-        return r.json() if r.content else {}
+        return self._corpo_json(r)
 
     def listar_pendentes(self) -> list[dict[str, Any]]:
         r = self._s.get(self._url("/fontes"), params={"status_proc": "pendente"}, timeout=self._timeout)

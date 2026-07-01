@@ -70,22 +70,36 @@ def instrucao_usuario(titulo: str, texto: str) -> str:
 
 
 def normalizar(mapa: dict[str, Any]) -> dict[str, Any]:
-    """Garante as três chaves e tipos básicos, descartando entradas inválidas."""
+    """Garante as três chaves e tipos básicos, descartando entradas inválidas.
+
+    Defensivo contra LLMs (mesmo com ``format=json`` a *forma* não é garantida):
+    a raiz pode não ser objeto e itens de conceitos/proposições podem vir como
+    strings em vez de dicts — nesses casos descartamos em vez de estourar.
+    """
+    if not isinstance(mapa, dict):
+        mapa = {}
     areas = [str(a).strip() for a in (mapa.get("areas") or []) if str(a).strip()]
 
     conceitos = []
     for c in mapa.get("conceitos") or []:
+        if not isinstance(c, dict):
+            continue
         rotulo = str(c.get("rotulo", "")).strip()
         if not rotulo:
             continue
+        areas_c = c.get("areas") or []
+        if not isinstance(areas_c, list):
+            areas_c = []
         conceitos.append({
             "rotulo": rotulo,
             "sentido": str(c.get("sentido", "")).strip() or rotulo,
-            "areas": [str(a).strip() for a in (c.get("areas") or []) if str(a).strip()],
+            "areas": [str(a).strip() for a in areas_c if str(a).strip()],
         })
 
     proposicoes = []
     for p in mapa.get("proposicoes") or []:
+        if not isinstance(p, dict):
+            continue
         o, r, d = (str(p.get(k, "")).strip() for k in ("origem_rotulo", "relacao", "destino_rotulo"))
         if not (o and r and d):
             continue

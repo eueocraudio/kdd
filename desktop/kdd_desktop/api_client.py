@@ -14,11 +14,29 @@ class KddApiError(RuntimeError):
 
 
 class KddClient:
-    def __init__(self, config: Config, timeout: float = 20.0) -> None:
+    def __init__(self, config: Config, timeout: tuple[float, float] = (5.0, 20.0)) -> None:
+        # timeout = (conexão, leitura): limita o congelamento da UI quando o
+        # servidor demora a conectar ou trava no meio da resposta.
         self._cfg = config
         self._timeout = timeout
         self._s = requests.Session()
         self._s.headers.update({"X-Token": config.token, "Accept": "application/json"})
+
+    @staticmethod
+    def _corpo_json(r: requests.Response) -> dict[str, Any]:
+        """Corpo como dict; {} se vazio ou não-JSON (ex.: HTML de erro de proxy)."""
+        if not r.content:
+            return {}
+        try:
+            data = r.json()
+        except ValueError:
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def _levantar_se_erro(self, r: requests.Response) -> None:
+        if r.status_code >= 400:
+            msg = self._corpo_json(r).get("erro") or (r.text[:500] if r.text else "")
+            raise KddApiError(f"HTTP {r.status_code}: {msg}")
 
     def _get(self, caminho: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         url = f"{self._cfg.base_url}{caminho}"
@@ -26,10 +44,8 @@ class KddClient:
             r = self._s.get(url, params=params, timeout=self._timeout)
         except requests.RequestException as e:  # rede
             raise KddApiError(f"Falha de rede: {e}") from e
-        if r.status_code >= 400:
-            msg = r.json().get("erro") if r.headers.get("content-type", "").startswith("application/json") else r.text
-            raise KddApiError(f"HTTP {r.status_code}: {msg}")
-        return r.json()
+        self._levantar_se_erro(r)
+        return self._corpo_json(r)
 
     def pode_editar(self) -> bool:
         """True se há token de validador configurado (editor exige escrita)."""
@@ -45,10 +61,8 @@ class KddClient:
             r = self._s.request(metodo, url, json=corpo, headers=cab, timeout=self._timeout)
         except requests.RequestException as e:
             raise KddApiError(f"Falha de rede: {e}") from e
-        if r.status_code >= 400:
-            msg = r.json().get("erro") if r.headers.get("content-type", "").startswith("application/json") else r.text
-            raise KddApiError(f"HTTP {r.status_code}: {msg}")
-        return r.json()
+        self._levantar_se_erro(r)
+        return self._corpo_json(r)
 
     # --- Endpoints de consulta ---
     def saude(self) -> dict[str, Any]:
@@ -163,7 +177,5 @@ class KddClient:
             r = self._s.post(f"{self._cfg.base_url}/fontes/{fonte_id}/reprocessar", timeout=self._timeout)
         except requests.RequestException as e:
             raise KddApiError(f"Falha de rede: {e}") from e
-        if r.status_code >= 400:
-            msg = r.json().get("erro") if r.headers.get("content-type", "").startswith("application/json") else r.text
-            raise KddApiError(f"HTTP {r.status_code}: {msg}")
-        return r.json()
+        self._levantar_se_erro(r)
+        return self._corpo_json(r)

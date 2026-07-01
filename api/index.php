@@ -20,7 +20,7 @@ require APP_ROOT . '/src/handlers/editor.php';
 kdd_load_env(APP_ROOT . '/.env');
 
 set_exception_handler(function (Throwable $e): void {
-    json_error('Erro interno: ' . $e->getMessage(), 500);
+    json_erro_interno($e, 'exceção não tratada');
 });
 
 $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';

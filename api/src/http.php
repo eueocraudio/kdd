@@ -16,6 +16,17 @@ function json_error(string $msg, int $status = 400): void
     json_out(['erro' => $msg], $status);
 }
 
+/**
+ * Falha interna (500): registra o detalhe da exceção no log do servidor mas
+ * devolve ao cliente uma mensagem GENÉRICA — não vaza schema/tabela/coluna nem
+ * usuário/host do MySQL (mensagens de PDOException com ERRMODE_EXCEPTION).
+ */
+function json_erro_interno(Throwable $e, string $contexto = 'erro interno'): void
+{
+    error_log('[kdd] ' . $contexto . ': ' . $e->getMessage() . ' @ ' . $e->getFile() . ':' . $e->getLine());
+    json_error('Erro interno ao processar a requisição.', 500);
+}
+
 /** Caminho da requisição, sem query string e sem barra final redundante. */
 function request_path(): string
 {

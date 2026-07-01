@@ -440,19 +440,29 @@ class MapaDialog(QDialog):
         self._escopo = self.cb_escopo.currentData()
         self.cb_alvo.blockSignals(True)
         self.cb_alvo.clear()
-        if self._escopo == "fonte":
-            for f in self._client.fontes():
-                self.cb_alvo.addItem(f"#{f['id']} — {f.get('titulo') or ''}", int(f["id"]))
-            self.cb_alvo.show()
-        elif self._escopo == "area":
-            for a in _achatar_areas(self._client.areas()):
-                self.cb_alvo.addItem(a["nome"], a["id"])
-            self.cb_alvo.show()
-        else:
-            self.cb_alvo.hide()
+        try:
+            if self._escopo == "fonte":
+                for f in self._client.fontes():
+                    self.cb_alvo.addItem(f"#{f['id']} — {f.get('titulo') or ''}", int(f["id"]))
+                self.cb_alvo.show()
+            elif self._escopo == "area":
+                for a in _achatar_areas(self._client.areas()):
+                    self.cb_alvo.addItem(a["nome"], a["id"])
+                self.cb_alvo.show()
+            else:
+                self.cb_alvo.hide()
+        except KddApiError as e:
+            self.cb_alvo.blockSignals(False)
+            QMessageBox.warning(self, "Erro", str(e))
+            return
         self.cb_alvo.blockSignals(False)
-        if self._escopo in ("fonte", "area") and self.cb_alvo.count():
-            self._alvo_id = self.cb_alvo.currentData()
+        # Mantém _alvo_id coerente com o escopo atual: se o novo escopo não tem
+        # itens (ou virou "conceito"), zera para não reusar um id de outro escopo
+        # (ex.: id de área sendo tratado como fonte em _coletar).
+        if self._escopo in ("fonte", "area"):
+            self._alvo_id = self.cb_alvo.currentData() if self.cb_alvo.count() else None
+        else:
+            self._alvo_id = None
         self._recarregar()
 
     def _mudar_alvo(self) -> None:

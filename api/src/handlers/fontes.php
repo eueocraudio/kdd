@@ -105,7 +105,31 @@ function fontes_criar(array $auth): void
         "INSERT INTO fonte (titulo, arquivo_caminho, arquivo_hash, status_proc, status_aprovacao)
          VALUES (?, ?, ?, 'pendente', 'pendente')"
     );
-    $stmt->execute([$titulo, $nome, $hash]);
+    try {
+        $stmt->execute([$titulo, $nome, $hash]);
+    } catch (PDOException $e) {
+        // Corrida: entre o SELECT de dedup acima e este INSERT, outro upload do
+        // mesmo conteúdo pode ter inserido primeiro (viola uq_fonte_hash). O UNIQUE
+        // garante a integridade; aqui devolvemos 409 limpo e removemos o arquivo
+        // órfão que já movemos, em vez de estourar 500 com "Duplicate entry".
+        if ($e->getCode() === '23000') {
+            @unlink($destino);
+            $dup->execute([$hash]);
+            $existente = $dup->fetch() ?: [];
+            json_out([
+                'erro'      => 'PDF já enviado anteriormente (mesmo conteúdo); não será reprocessado.',
+                'duplicado' => true,
+                'fonte'     => [
+                    'id'               => (int) ($existente['id'] ?? 0),
+                    'titulo'           => $existente['titulo'] ?? null,
+                    'status_proc'      => $existente['status_proc'] ?? null,
+                    'status_aprovacao' => $existente['status_aprovacao'] ?? null,
+                ],
+            ], 409);
+        }
+        @unlink($destino);
+        throw $e;
+    }
     $id = (int) $pdo->lastInsertId();
 
     json_out([
@@ -161,33 +185,37 @@ function fontes_atualizar(int $id): void
         json_error('Fonte não encontrada', 404);
     }
 
-    // Atualiza status_proc se fornecido
+    // Valida status_proc antes de abrir transação
     $status_validos = ['processando', 'processado', 'erro'];
-    if (isset($body['status_proc'])) {
-        if (!in_array($body['status_proc'], $status_validos, true)) {
-            json_error('status_proc inválido. Valores aceitos: ' . implode(', ', $status_validos), 400);
-        }
-        $pdo->prepare("UPDATE fonte SET status_proc = ? WHERE id = ?")
-            ->execute([$body['status_proc'], $id]);
+    if (isset($body['status_proc']) && !in_array($body['status_proc'], $status_validos, true)) {
+        json_error('status_proc inválido. Valores aceitos: ' . implode(', ', $status_validos), 400);
     }
 
-    // Vincula áreas se fornecidas (cria as que não existirem)
-    if (isset($body['areas']) && is_array($body['areas'])) {
-        $areas_gravadas = [];
-        foreach ($body['areas'] as $nome_area) {
-            $nome_area = trim((string) $nome_area);
-            if ($nome_area === '') {
-                continue;
-            }
-            $area_id = kdd_upsert_area($pdo, $nome_area);
-
-            // Vínculo N–N fonte_area (ignora duplicado)
-            $pdo->prepare(
-                "INSERT IGNORE INTO fonte_area (fonte_id, area_id) VALUES (?, ?)"
-            )->execute([$id, $area_id]);
-
-            $areas_gravadas[] = ['id' => $area_id, 'nome' => $nome_area];
+    // Status + áreas num único bloco atômico: ou tudo, ou nada (evita estado
+    // parcial — status novo com só parte das áreas vinculadas).
+    $pdo->beginTransaction();
+    try {
+        if (isset($body['status_proc'])) {
+            $pdo->prepare("UPDATE fonte SET status_proc = ? WHERE id = ?")
+                ->execute([$body['status_proc'], $id]);
         }
+
+        if (isset($body['areas']) && is_array($body['areas'])) {
+            foreach ($body['areas'] as $nome_area) {
+                $nome_area = trim((string) $nome_area);
+                if ($nome_area === '') {
+                    continue;
+                }
+                $area_id = kdd_upsert_area($pdo, $nome_area);
+                $pdo->prepare(
+                    "INSERT IGNORE INTO fonte_area (fonte_id, area_id) VALUES (?, ?)"
+                )->execute([$id, $area_id]);
+            }
+        }
+        $pdo->commit();
+    } catch (Throwable $e) {
+        $pdo->rollBack();
+        json_erro_interno($e, 'atualizar fonte ' . $id);
     }
 
     // Devolve fonte atualizada
@@ -350,7 +378,17 @@ function fontes_mapas(int $id): void
         ]);
     } catch (Throwable $e) {
         $pdo->rollBack();
-        json_error('Falha na transação: ' . $e->getMessage(), 500);
+        // O push falhou e o rollback desfez tudo, mas o bot já pusera a fonte em
+        // 'processando'. Marca 'erro' (fora da transação abortada) para não ficar
+        // presa e continuar reprocessável (/reprocessar só aceita 'erro'). Não
+        // rebaixa uma fonte já 'processado' (re-push idempotente que falhou).
+        try {
+            $pdo->prepare("UPDATE fonte SET status_proc = 'erro' WHERE id = ? AND status_proc <> 'processado'")
+                ->execute([$id]);
+        } catch (Throwable $e2) {
+            error_log('[kdd] falha ao marcar fonte ' . $id . ' como erro: ' . $e2->getMessage());
+        }
+        json_erro_interno($e, 'push de mapa da fonte ' . $id);
     }
 }
 
@@ -376,8 +414,27 @@ function kdd_resolver_conceito(PDO $pdo, string $rotulo, string $sentido): int
         return $conceito_id;
     }
 
-    $pdo->prepare("INSERT INTO conceito (sentido) VALUES (?)")->execute([$sentido]);
-    $conceito_id = (int) $pdo->lastInsertId();
+    try {
+        $pdo->prepare("INSERT INTO conceito (sentido) VALUES (?)")->execute([$sentido]);
+        $conceito_id = (int) $pdo->lastInsertId();
+    } catch (PDOException $e) {
+        // Corrida: outro processo (ex.: curador) criou o MESMO sentido entre o
+        // SELECT e este INSERT. Protegido por UNIQUE(sentido) (migration 004) —
+        // aqui reaproveitamos o conceito existente em vez de fragmentar a
+        // identidade em dois ids. Leitura com FOR UPDATE para enxergar a linha
+        // recém-commitada mesmo sob REPEATABLE READ.
+        if ($e->getCode() !== '23000') {
+            throw $e;
+        }
+        $lock = $pdo->prepare("SELECT id FROM conceito WHERE sentido = ? LIMIT 1 FOR UPDATE");
+        $lock->execute([$sentido]);
+        $conceito_id = (int) $lock->fetchColumn();
+        if ($conceito_id <= 0) {
+            throw $e;
+        }
+        kdd_garantir_rotulo($pdo, $conceito_id, $rotulo, false);
+        return $conceito_id;
+    }
     kdd_garantir_rotulo($pdo, $conceito_id, $rotulo, true);
     return $conceito_id;
 }

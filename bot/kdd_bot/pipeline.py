@@ -107,7 +107,15 @@ class Pipeline:
             log.info("[fonte %s] seção %d/%d: +%d conceitos, +%d proposições (push: %s)",
                      fid, i, n, len(mapa["conceitos"]), len(mapa["proposicoes"]), res.get("ok"))
 
-        # garante status processado (cada push já marca, mas reforça se tudo falhou)
+        # Se TODAS as seções falharam nada foi empurrado (a API nunca marcou
+        # processado): marca erro para não sumir da fila como falso sucesso — assim
+        # a fonte fica reprocessável (POST /fontes/{id}/reprocessar só age sobre erro).
+        if total_c == 0 and total_p == 0:
+            self._client.atualizar_status(fid, "erro")
+            log.error("[fonte %s] todas as %d seção(ões) falharam na extração; marcada como erro", fid, n)
+            return False
+
+        # garante status processado (cada push já marca, mas reforça)
         self._client.atualizar_status(fid, "processado")
         log.info("[fonte %s] concluído por seções: %d seções, %d conceitos e %d proposições enviados (brutos)",
                  fid, n, total_c, total_p)
