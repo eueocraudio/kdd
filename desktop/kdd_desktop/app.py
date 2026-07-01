@@ -6,6 +6,7 @@ from typing import Any
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QApplication,
     QCheckBox,
     QComboBox,
@@ -53,11 +54,13 @@ class MainWindow(QMainWindow):
         self.busca.returnPressed.connect(self._buscar)
 
         self.arvore = QTreeWidget()
-        self.arvore.setHeaderLabel("Áreas")
-        self.arvore.itemClicked.connect(self._area_selecionada)
+        self.arvore.setHeaderLabel("Áreas (Ctrl/Shift p/ várias)")
+        # multi-seleção: filtra pela UNIÃO das áreas marcadas
+        self.arvore.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.arvore.itemSelectionChanged.connect(self._areas_selecionadas)
 
         btn_todas = QPushButton("Todos os conceitos")
-        btn_todas.clicked.connect(lambda: self._listar_conceitos())
+        btn_todas.clicked.connect(self._limpar_areas)
         btn_const = QPushButton("Constelação…")
         btn_const.clicked.connect(self._abrir_constelacao)
 
@@ -109,6 +112,16 @@ class MainWindow(QMainWindow):
         b_pdf.clicked.connect(self._enviar_pdf)
         barra.addWidget(b_pdf)
 
+        # Contexto (lente por fonte): filtra a base ao que veio de uma fonte.
+        barra.addSeparator()
+        barra.addWidget(QLabel(" Contexto: "))
+        self.cb_contexto = QComboBox()
+        self.cb_contexto.setMinimumWidth(220)
+        self.cb_contexto.setToolTip(
+            "Lente por fonte: mostra só conceitos daquela fonte; o botão Mapas abre o mapa dela.")
+        self.cb_contexto.currentIndexChanged.connect(self._mudar_contexto)
+        barra.addWidget(self.cb_contexto)
+
         # Ações de edição — só quando há token de validador (perfil de curadoria)
         if self._client.pode_editar():
             barra.addSeparator()
@@ -126,18 +139,22 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Pronto. (somente leitura — sem token de validador)")
 
         self._conceito_atual: int | None = None
+        self._contexto_fonte: int | None = None   # fonte-contexto ativa (None = todas)
 
     # ── ações ──
     def _recarregar(self) -> None:
         try:
             self._client.saude()
             self._carregar_areas()
-            self._listar_conceitos()
+            self._carregar_contexto()
+            self._listar_conceitos(areas=self._areas_marcadas() or None)
             self.statusBar().showMessage(f"Conectado a {self._client._cfg.base_url}")
         except KddApiError as e:
             self._erro(str(e))
 
     def _carregar_areas(self) -> None:
+        # bloqueia sinais durante a reconstrução (clear/add não devem disparar filtro)
+        self.arvore.blockSignals(True)
         self.arvore.clear()
 
         def adicionar(pai: QTreeWidgetItem | None, no: dict[str, Any]) -> None:
@@ -150,17 +167,48 @@ class MainWindow(QMainWindow):
         for raiz in self._client.areas():
             adicionar(None, raiz)
         self.arvore.expandAll()
+        self.arvore.blockSignals(False)
 
-    def _area_selecionada(self, item: QTreeWidgetItem) -> None:
-        area_id = item.data(0, Qt.ItemDataRole.UserRole)
-        self._listar_conceitos(area=int(area_id))
+    def _carregar_contexto(self) -> None:
+        """Popula o combo de contexto (— Todas — + fontes), preservando a seleção."""
+        atual = self._contexto_fonte
+        self.cb_contexto.blockSignals(True)
+        self.cb_contexto.clear()
+        self.cb_contexto.addItem("— Todas as fontes —", None)
+        try:
+            for f in self._client.fontes():
+                self.cb_contexto.addItem(f"#{f['id']} — {f.get('titulo') or ''}", int(f["id"]))
+        except KddApiError:
+            pass  # sem fontes: segue só com "Todas"
+        idx = self.cb_contexto.findData(atual) if atual is not None else 0
+        self.cb_contexto.setCurrentIndex(idx if idx >= 0 else 0)
+        self._contexto_fonte = self.cb_contexto.currentData()
+        self.cb_contexto.blockSignals(False)
+
+    def _mudar_contexto(self) -> None:
+        self._contexto_fonte = self.cb_contexto.currentData()
+        self._listar_conceitos(areas=self._areas_marcadas() or None)
+
+    def _areas_marcadas(self) -> list[int]:
+        return [int(it.data(0, Qt.ItemDataRole.UserRole)) for it in self.arvore.selectedItems()]
+
+    def _areas_selecionadas(self) -> None:
+        self._listar_conceitos(areas=self._areas_marcadas() or None)
+
+    def _limpar_areas(self) -> None:
+        self.arvore.blockSignals(True)
+        self.arvore.clearSelection()
+        self.arvore.blockSignals(False)
+        self._listar_conceitos()
 
     def _buscar(self) -> None:
-        self._listar_conceitos(q=self.busca.text().strip() or None)
+        self._listar_conceitos(q=self.busca.text().strip() or None,
+                               areas=self._areas_marcadas() or None)
 
-    def _listar_conceitos(self, q: str | None = None, area: int | None = None) -> None:
+    def _listar_conceitos(self, q: str | None = None, areas: list[int] | None = None) -> None:
+        # o contexto (fonte) sempre compõe com busca/áreas (tudo AND)
         try:
-            conceitos = self._client.conceitos(q=q, area=area)
+            conceitos = self._client.conceitos(q=q, areas=areas, fonte=self._contexto_fonte)
         except KddApiError as e:
             self._erro(str(e))
             return
@@ -171,7 +219,14 @@ class MainWindow(QMainWindow):
             self.tabela.setItem(linha, 0, QTableWidgetItem(str(c["id"])))
             self.tabela.setItem(linha, 1, QTableWidgetItem(c.get("rotulos") or ""))
             self.tabela.setItem(linha, 2, QTableWidgetItem(c.get("areas") or ""))
-        alvo = "todos" if not (q or area) else (f"q='{q}'" if q else f"área {area}")
+        partes = []
+        if q:
+            partes.append(f"q='{q}'")
+        if areas:
+            partes.append(f"{len(areas)} área(s)")
+        if self._contexto_fonte:
+            partes.append(f"contexto fonte #{self._contexto_fonte}")
+        alvo = ", ".join(partes) or "todos"
         self.statusBar().showMessage(f"{len(conceitos)} conceito(s) — {alvo}")
 
     def _conceito_selecionado(self, linha: int, _coluna: int) -> None:
@@ -235,9 +290,14 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Área '{nome.strip()}' criada.")
 
     def _abrir_mapas(self) -> None:
-        from .mapa import MapasDialog
-        MapasDialog(self._client, self).exec()
-        self._listar_conceitos()
+        # Com contexto ativo, abre direto o mapa daquela fonte; senão, a lista de mapas.
+        if self._contexto_fonte:
+            from .mapa import MapaDialog
+            MapaDialog(self._client, escopo="fonte", alvo_id=self._contexto_fonte, pai=self).exec()
+        else:
+            from .mapa import MapasDialog
+            MapasDialog(self._client, self).exec()
+        self._listar_conceitos(areas=self._areas_marcadas() or None)
 
     def _enviar_pdf(self) -> None:
         from pathlib import Path

@@ -55,7 +55,20 @@ function conceitos_listar(): void
 {
     $pdo    = kdd_db();
     $q      = trim((string) ($_GET['q']    ?? ''));
-    $areaId = isset($_GET['area']) && $_GET['area'] !== '' ? (int) $_GET['area'] : null;
+    // ?area aceita id único ou lista CSV (?area=1,2,3) — semântica de UNIÃO
+    // (conceitos em QUALQUER das áreas). Retrocompatível com ?area=1.
+    $areaIds = [];
+    if (isset($_GET['area']) && $_GET['area'] !== '') {
+        foreach (explode(',', (string) $_GET['area']) as $a) {
+            $a = (int) trim($a);
+            if ($a > 0) {
+                $areaIds[] = $a;
+            }
+        }
+        $areaIds = array_values(array_unique($areaIds));
+    }
+    // ?fonte=<id> — "lente de contexto": só conceitos daquela fonte (proveniência).
+    $fonteId = isset($_GET['fonte']) && $_GET['fonte'] !== '' ? (int) $_GET['fonte'] : null;
 
     $where  = [];
     $params = [];
@@ -64,9 +77,16 @@ function conceitos_listar(): void
         $where[]  = "EXISTS (SELECT 1 FROM rotulo rq WHERE rq.conceito_id = c.id AND rq.texto LIKE ?)";
         $params[] = '%' . $q . '%';
     }
-    if ($areaId !== null) {
-        $where[]  = "EXISTS (SELECT 1 FROM conceito_area cq WHERE cq.conceito_id = c.id AND cq.area_id = ?)";
-        $params[] = $areaId;
+    if ($areaIds) {
+        $ph = implode(',', array_fill(0, count($areaIds), '?'));
+        $where[] = "EXISTS (SELECT 1 FROM conceito_area cq WHERE cq.conceito_id = c.id AND cq.area_id IN ($ph))";
+        foreach ($areaIds as $a) {
+            $params[] = $a;
+        }
+    }
+    if ($fonteId !== null) {
+        $where[]  = "EXISTS (SELECT 1 FROM conceito_fonte cf WHERE cf.conceito_id = c.id AND cf.fonte_id = ?)";
+        $params[] = $fonteId;
     }
 
     $sql = "SELECT c.id, c.sentido,

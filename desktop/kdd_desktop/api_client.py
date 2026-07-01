@@ -71,12 +71,20 @@ class KddClient:
     def areas(self) -> list[dict[str, Any]]:
         return self._get("/areas").get("areas", [])
 
-    def conceitos(self, q: str | None = None, area: int | None = None) -> list[dict[str, Any]]:
+    def conceitos(self, q: str | None = None, area: int | None = None,
+                  areas: list[int] | None = None, fonte: int | None = None) -> list[dict[str, Any]]:
+        """Lista conceitos. Filtros compõem (AND): busca ``q``; ``areas`` (união —
+        conceitos em qualquer das áreas) ou ``area`` único; ``fonte`` (contexto —
+        só conceitos daquela fonte)."""
         params: dict[str, Any] = {}
         if q:
             params["q"] = q
-        if area:
+        if areas:
+            params["area"] = ",".join(str(int(a)) for a in areas)
+        elif area:
             params["area"] = area
+        if fonte:
+            params["fonte"] = fonte
         return self._get("/conceitos", params).get("conceitos", [])
 
     def conceito(self, conceito_id: int) -> dict[str, Any]:
