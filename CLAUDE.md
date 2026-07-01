@@ -12,11 +12,11 @@ KDD (Knowledge Discovery in Databases) extrai conhecimento de PDFs e o represent
 
 Três soluções sobre um núcleo comum (o "armazém"):
 
-1. **`api/`** — Web API PHP + MySQL: a fonte da verdade. Versiona, gerencia aprovação, serve consulta. Headless (só JSON). **Em produção na Hostinger.**
-2. **`desktop/`** — cliente PySide6 **somente leitura** (Marco 2): humanos navegam áreas/conceitos/constelação.
+1. **`api/`** — Web API PHP + MySQL: a fonte da verdade. Versiona, gerencia aprovação, serve consulta e recebe escrita de curadoria. Headless (só JSON). **Em produção na Hostinger.**
+2. **`desktop/`** — cliente PySide6: navega áreas/conceitos/constelação/mapas (leitura) **e edita** (curadoria manual). Abas: "Áreas e Conceitos", "Mapas" (diagrama visual em `mapa.py`), "Fila" (status de processamento das fontes). O modo edição só aparece quando há `KDD_TOKEN_VALIDADOR` (ver Editor abaixo).
 3. **`bot/`** — bot Python (Marco 3): lê PDFs pendentes, extrai mapas com IA e empurra propostas para aprovação humana.
 
-`docs/especificacao.md` e `docs/plano-implementacao.md` têm a especificação completa e os marcos. **Modo de trabalho: especificar antes de codar.**
+`docs/especificacao.md` e `docs/plano-implementacao.md` têm a especificação completa e os marcos; `docs/editor-mapas.md` especifica o editor manual. **Modo de trabalho: especificar antes de codar.**
 
 ## Modelo de domínio (essencial para mexer no código)
 
@@ -37,6 +37,18 @@ validador humano: POST /fontes/{id}/aprovar | /reprovar  → só então a certez
 ```
 
 `POST /fontes/{id}/mapas` é uma transação idempotente: resolve conceitos por **sentido exato** (helper `kdd_resolver_conceito` em `api/src/handlers/fontes.php`), faz upsert, e re-push **não duplica**. Limitação conhecida: dentro de um mesmo push, proposições referenciam conceitos por rótulo (colisão se dois sentidos do mesmo rótulo no mesmo PDF).
+
+`POST /fontes/{id}/reprocessar` (endpoint + botão "Reprocessar" na aba Fila) volta uma fonte com `status_proc=erro` para `pendente`, para o bot tentar de novo.
+
+**Dedup de PDF por hash** (migration `003_hash_fonte.sql`): `fonte.arquivo_hash` guarda o SHA-256 do arquivo, com índice único — reenviar o **mesmo conteúdo** é bloqueado. Fontes de curadoria não têm arquivo → `hash NULL` (o índice único permite múltiplos NULL).
+
+## Editor / curadoria manual (`api/src/handlers/editor.php`)
+
+Contraparte de curadoria do bot: humano corrige o armazém **sem** depender de novo PDF (criar/editar/remover proposições, conceitos, rótulos, áreas, **merge** e **split** de conceitos). Todos os endpoints de escrita exigem **perfil validador** (`kdd_exigir_validador`).
+
+- Edições de curadoria são atribuídas a uma **fonte sintética** `origem='curadoria'` (`kdd_fonte_curadoria`), criada já `status_proc=processado` + `status_aprovacao=aprovada` — por isso contam na certeza imediatamente.
+- Toda escrita grava um **changeset** append-only (`kdd_log_changeset`: autor, perfil, ação, alvo, antes/depois em JSON) — auditoria da curadoria.
+- No desktop, o modo edição (`ConceitoEditorDialog`, criar conceito/área) só aparece com `KDD_TOKEN_VALIDADOR`; sem ele o cliente é só leitura.
 
 ## Autenticação
 
