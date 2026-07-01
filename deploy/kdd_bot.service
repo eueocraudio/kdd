@@ -1,0 +1,16 @@
+[Unit]
+Description=kdd_bot — ingestão KDD via rolhama (extrai mapa das fontes pendentes)
+After=network-online.target rolhama-worker.service
+Wants=network-online.target rolhama-worker.service
+
+[Service]
+Type=simple
+User=user
+WorkingDirectory=/home/user/kdd_bot
+EnvironmentFile=/home/user/kdd_bot/.env
+ExecStart=/home/user/legendar/venv/bin/python /home/user/kdd_bot/main.py --loop --intervalo 60 --backend rolhama
+Restart=on-failure
+RestartSec=20
+
+[Install]
+WantedBy=multi-user.target
