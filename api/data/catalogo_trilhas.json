@@ -1,0 +1,44 @@
+{
+  "_meta": {
+    "descricao": "Catálogo de termos e caminhos CONHECIDOS por trilha. São palavras/paths que valem como CONCEITO — quando aparecem numa fonte, viram (ou sugerem) conceito no KDD. Versionado e curável em PR.",
+    "formato": "trilhas.<slug_da_trilha> = lista de termos (podem ser caminhos Linux/Windows ou termos técnicos). O slug casa com trilha.slug no app hacker.",
+    "atualizado_em": "2026-07-02"
+  },
+  "trilhas": {
+    "linux-sysadmin": [
+      "/etc/passwd", "/etc/shadow", "/etc/group", "/etc/sudoers", "/etc/fstab",
+      "/etc/hosts", "/etc/crontab", "/etc/ssh/sshd_config", "/etc/resolv.conf",
+      "/var/log", "/proc", "/boot/grub", "/etc/systemd",
+      "systemd", "systemctl", "journalctl", "cron", "LVM", "RAID", "GRUB",
+      "SELinux", "AppArmor", "iptables", "nftables", "firewalld", "SSH", "sudo",
+      "umask", "SUID", "SGID", "chmod", "chown", "rsync", "Ansible", "Podman", "NFS"
+    ],
+    "noc": [
+      "VLAN", "Trunk", "802.1Q", "EtherChannel", "STP", "OSPF", "EIGRP", "BGP",
+      "HSRP", "VRRP", "ACL", "NAT", "DHCP", "DNS", "SNMP", "NetFlow", "Syslog",
+      "QoS", "ICMP", "NTP", "traceroute", "ping", "Zabbix", "Nagios", "PRTG", "ITIL"
+    ],
+    "red-team": [
+      "Active Directory", "Kerberos", "NTLM", "Kerberoasting", "AS-REP roasting",
+      "Pass-the-Hash", "Pass-the-Ticket", "Overpass-the-Hash", "Golden Ticket",
+      "Silver Ticket", "DCSync", "BloodHound", "PowerView", "Mimikatz", "LSASS",
+      "Cobalt Strike", "C2", "AMSI", "ETW", "LOLBins", "SMB", "LDAP", "RBCD"
+    ],
+    "blue-team": [
+      "SIEM", "Splunk", "ELK", "Sigma", "YARA", "Suricata", "Snort", "Zeek",
+      "Sysmon", "IOC", "MITRE ATT&CK", "Pyramid of Pain", "Volatility",
+      "prefetch", "shimcache", "amcache", "Event ID", "PICERL",
+      "C:\\Windows\\System32\\config\\SAM", "C:\\Windows\\System32\\winevt"
+    ],
+    "threat-hunter": [
+      "Beaconing", "DNS tunneling", "JA3", "osquery", "Sysmon", "ETW", "auditd",
+      "CloudTrail", "MITRE ATT&CK", "Diamond Model", "Cyber Kill Chain",
+      "STIX", "TAXII", "MISP", "process hollowing", "LOLBins", "Malleable C2"
+    ],
+    "hacker-etico": [
+      "Nmap", "Metasploit", "Burp Suite", "SQL Injection", "XSS", "OSINT",
+      "Shodan", "reverse shell", "privilege escalation", "hashcat",
+      "John the Ripper", "Wireshark", "netcat", "/etc/passwd", "SearchSploit"
+    ]
+  }
+}
