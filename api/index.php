@@ -128,6 +128,9 @@ if (preg_match('#^/conceitos/(\d+)/merge$#', $path, $m) && $method === 'POST') {
 if (preg_match('#^/conceitos/(\d+)/split$#', $path, $m) && $method === 'POST') {
     conceito_split($auth, (int) $m[1]);
 }
+if (preg_match('#^/conceitos/(\d+)/desabilitar$#', $path, $m) && $method === 'POST') {
+    conceito_desabilitar($auth, (int) $m[1]);
+}
 
 if (preg_match('#^/rotulos/(\d+)$#', $path, $m)) {
     if ($method === 'PATCH')  { rotulo_editar($auth, (int) $m[1]); }

@@ -69,7 +69,7 @@ function kdd_certeza(PDO $pdo, int $propId): int
 /** Snapshot leve de um conceito (p/ changeset/resposta). */
 function kdd_conceito_resumo(PDO $pdo, int $id): ?array
 {
-    $s = $pdo->prepare("SELECT id, sentido FROM conceito WHERE id = ?");
+    $s = $pdo->prepare("SELECT id, sentido, desabilitado FROM conceito WHERE id = ?");
     $s->execute([$id]);
     $c = $s->fetch();
     if (!$c) {
@@ -82,6 +82,7 @@ function kdd_conceito_resumo(PDO $pdo, int $id): ?array
     );
     $a->execute([$id]);
     return ['id' => (int) $c['id'], 'sentido' => $c['sentido'],
+            'desabilitado' => (int) $c['desabilitado'],
             'rotulos' => $r->fetchAll(), 'areas' => $a->fetchAll()];
 }
 
@@ -341,6 +342,27 @@ function conceito_editar(array $auth, int $id): void
     }
     kdd_log_changeset($pdo, $auth, 'editar_conceito', 'conceito', $id, $antes, kdd_conceito_resumo($pdo, $id));
     json_out(['ok' => true, 'conceito' => kdd_conceito_resumo($pdo, $id)]);
+}
+
+/** POST /conceitos/{id}/desabilitar  { desabilitado: 0|1 }
+ * Desabilita/reabilita um conceito. As PROPOSIÇÕES que o envolvem ficam inativas por
+ * cálculo (o mapa marca; nada é apagado; reabilitar reverte). */
+function conceito_desabilitar(array $auth, int $id): void
+{
+    kdd_exigir_validador($auth);
+    $pdo  = kdd_db();
+    $body = json_body();
+    kdd_assert_conceito($pdo, $id);
+    if (!isset($body['desabilitado']) || !in_array((int) $body['desabilitado'], [0, 1], true)) {
+        json_error('Informe desabilitado: 0 ou 1', 400);
+    }
+    $des   = (int) $body['desabilitado'];
+    $antes = kdd_conceito_resumo($pdo, $id);
+    $pdo->prepare("UPDATE conceito SET desabilitado = ? WHERE id = ?")->execute([$des, $id]);
+    $depois = kdd_conceito_resumo($pdo, $id);
+    kdd_log_changeset($pdo, $auth, $des ? 'desabilitar_conceito' : 'reabilitar_conceito',
+                      'conceito', $id, $antes, $depois);
+    json_out(['ok' => true, 'conceito' => $depois]);
 }
 
 /** POST /conceitos/{id}/rotulos  { texto, principal? } */

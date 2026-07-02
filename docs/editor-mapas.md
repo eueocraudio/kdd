@@ -126,6 +126,7 @@ B para o A, depois remove B. Deve ser **transacional** e idempotente.
 | O8 | Mesclar conceito B em A | reaponta tudo de B→A; remove B (transacional) |
 | O9 | Desambiguar (separar homônimos) | cria conceito novo; move rótulos/proposições selecionados para ele |
 | O10 | CRUD de área | INSERT/UPDATE/DELETE `area` (valida ciclo em `parent_id`) |
+| O11 | Desabilitar/reabilitar conceito | UPDATE `conceito.desabilitado` (0/1); nada é apagado — as consultas expõem `desabilitado` no conceito e `desabilitada` (calculada: origem OU destino desabilitado) nas proposições, para o cliente marcar/filtrar; a certeza na view **não** muda (decisão: marcar, não esconder) |
 
 **Resolução de conceito por destino:** ao criar/editar proposição, o editor deve permitir
 escolher o conceito de destino **por id** (busca por rótulo+sentido na UI), eliminando a
@@ -151,6 +152,7 @@ O editor exige endpoints de escrita granular (todos exigem token; ver §6):
 - `POST   /conceitos/{id}/areas` · `DELETE /conceitos/{id}/areas/{area_id}`. (O7)
 - `POST   /conceitos/{id}/merge` — `{outro_id}` mescla outro→id. (O8)
 - `POST   /conceitos/{id}/split` — desambigua (move rótulos/proposições p/ conceito novo). (O9)
+- `POST   /conceitos/{id}/desabilitar` — `{desabilitado: 0|1}` (obrigatório; 400 se ausente/inválido). (O11)
 
 **Áreas**
 - `POST /areas` · `PATCH /areas/{id}` · `DELETE /areas/{id}` (valida ciclo/filhos). (O10)

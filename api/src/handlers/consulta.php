@@ -89,7 +89,7 @@ function conceitos_listar(): void
         $params[] = $fonteId;
     }
 
-    $sql = "SELECT c.id, c.sentido,
+    $sql = "SELECT c.id, c.sentido, c.desabilitado,
                    GROUP_CONCAT(DISTINCT r.texto ORDER BY r.principal DESC, r.texto SEPARATOR ', ') AS rotulos,
                    GROUP_CONCAT(DISTINCT a.nome  ORDER BY a.nome SEPARATOR ', ')                    AS areas
               FROM conceito c
@@ -99,13 +99,14 @@ function conceitos_listar(): void
     if ($where) {
         $sql .= " WHERE " . implode(' AND ', $where);
     }
-    $sql .= " GROUP BY c.id, c.sentido ORDER BY c.id";
+    $sql .= " GROUP BY c.id, c.sentido, c.desabilitado ORDER BY c.id";
 
     $stmt = $pdo->prepare($sql);
     $stmt->execute($params);
 
     $conceitos = array_map(static function (array $row): array {
-        $row['id'] = (int) $row['id'];
+        $row['id']           = (int) $row['id'];
+        $row['desabilitado'] = (int) $row['desabilitado'];
         return $row;
     }, $stmt->fetchAll());
 
@@ -119,13 +120,14 @@ function conceitos_listar(): void
 function conceitos_obter(int $id): void
 {
     $pdo  = kdd_db();
-    $stmt = $pdo->prepare("SELECT id, sentido, criado_em FROM conceito WHERE id = ?");
+    $stmt = $pdo->prepare("SELECT id, sentido, desabilitado, criado_em FROM conceito WHERE id = ?");
     $stmt->execute([$id]);
     $conceito = $stmt->fetch();
     if (!$conceito) {
         json_error('Conceito não encontrado', 404);
     }
-    $conceito['id'] = (int) $conceito['id'];
+    $conceito['id']           = (int) $conceito['id'];
+    $conceito['desabilitado'] = (int) $conceito['desabilitado'];
 
     // Rótulos
     $s = $pdo->prepare("SELECT id, texto, principal FROM rotulo WHERE conceito_id = ? ORDER BY principal DESC, texto");
@@ -183,7 +185,10 @@ function kdd_proposicoes_do_conceito(PDO $pdo, int $conceitoId, string $lado): a
     $sql = "SELECT p.id, p.relacao, p.$col_outro AS outro_id,
                    (SELECT texto FROM rotulo WHERE conceito_id = p.$col_outro
                      ORDER BY principal DESC, id LIMIT 1) AS outro_rotulo,
-                   v.fontes_aprovadas
+                   v.fontes_aprovadas,
+                   EXISTS (SELECT 1 FROM conceito cx
+                            WHERE cx.id IN (p.conceito_origem, p.conceito_destino)
+                              AND cx.desabilitado = 1) AS desabilitada
               FROM proposicao p
               JOIN vw_certeza_proposicao v ON v.proposicao_id = p.id
              WHERE p.$col_self = ?
@@ -197,6 +202,7 @@ function kdd_proposicoes_do_conceito(PDO $pdo, int $conceitoId, string $lado): a
             'relacao'          => $r['relacao'],
             $chave             => ['id' => (int) $r['outro_id'], 'rotulo' => $r['outro_rotulo']],
             'fontes_aprovadas' => (int) $r['fontes_aprovadas'],
+            'desabilitada'     => (int) $r['desabilitada'],
         ];
     }, $s->fetchAll());
 }
@@ -219,7 +225,10 @@ function proposicoes_listar(): void
                    p.conceito_destino,
                    (SELECT texto FROM rotulo WHERE conceito_id = p.conceito_destino
                      ORDER BY principal DESC, id LIMIT 1) AS destino_rotulo,
-                   v.fontes_aprovadas
+                   v.fontes_aprovadas,
+                   EXISTS (SELECT 1 FROM conceito cx
+                            WHERE cx.id IN (p.conceito_origem, p.conceito_destino)
+                              AND cx.desabilitado = 1) AS desabilitada
               FROM proposicao p
               JOIN vw_certeza_proposicao v ON v.proposicao_id = p.id";
     $params = [];
@@ -239,6 +248,7 @@ function proposicoes_listar(): void
             'origem'           => ['id' => (int) $r['conceito_origem'],  'rotulo' => $r['origem_rotulo']],
             'destino'          => ['id' => (int) $r['conceito_destino'], 'rotulo' => $r['destino_rotulo']],
             'fontes_aprovadas' => (int) $r['fontes_aprovadas'],
+            'desabilitada'     => (int) $r['desabilitada'],
         ];
     }, $stmt->fetchAll());
 
@@ -261,7 +271,7 @@ function fonte_mapa(int $id): void
     }
 
     $s = $pdo->prepare(
-        "SELECT c.id, c.sentido,
+        "SELECT c.id, c.sentido, c.desabilitado,
                 (SELECT texto FROM rotulo WHERE conceito_id = c.id ORDER BY principal DESC, id LIMIT 1) AS rotulo,
                 GROUP_CONCAT(DISTINCT a.nome ORDER BY a.nome SEPARATOR ', ') AS areas
            FROM conceito_fonte cf
@@ -269,11 +279,12 @@ function fonte_mapa(int $id): void
            LEFT JOIN conceito_area ca ON ca.conceito_id = c.id
            LEFT JOIN area a         ON a.id = ca.area_id
           WHERE cf.fonte_id = ?
-          GROUP BY c.id, c.sentido ORDER BY c.id"
+          GROUP BY c.id, c.sentido, c.desabilitado ORDER BY c.id"
     );
     $s->execute([$id]);
     $conceitos = array_map(static function (array $r): array {
-        return ['id' => (int) $r['id'], 'rotulo' => $r['rotulo'], 'sentido' => $r['sentido'], 'areas' => $r['areas']];
+        return ['id' => (int) $r['id'], 'rotulo' => $r['rotulo'], 'sentido' => $r['sentido'],
+                'areas' => $r['areas'], 'desabilitado' => (int) $r['desabilitado']];
     }, $s->fetchAll());
 
     $s = $pdo->prepare(
@@ -282,7 +293,10 @@ function fonte_mapa(int $id): void
                 (SELECT texto FROM rotulo WHERE conceito_id = p.conceito_origem  ORDER BY principal DESC, id LIMIT 1) AS origem_rotulo,
                 p.conceito_destino AS destino_id,
                 (SELECT texto FROM rotulo WHERE conceito_id = p.conceito_destino ORDER BY principal DESC, id LIMIT 1) AS destino_rotulo,
-                v.fontes_aprovadas
+                v.fontes_aprovadas,
+                EXISTS (SELECT 1 FROM conceito cx
+                         WHERE cx.id IN (p.conceito_origem, p.conceito_destino)
+                           AND cx.desabilitado = 1) AS desabilitada
            FROM referencia rf
            JOIN proposicao p ON p.id = rf.proposicao_id
            JOIN vw_certeza_proposicao v ON v.proposicao_id = p.id
@@ -297,6 +311,7 @@ function fonte_mapa(int $id): void
             'origem'           => ['id' => (int) $r['origem_id'],  'rotulo' => $r['origem_rotulo']],
             'destino'          => ['id' => (int) $r['destino_id'], 'rotulo' => $r['destino_rotulo']],
             'fontes_aprovadas' => (int) $r['fontes_aprovadas'],
+            'desabilitada'     => (int) $r['desabilitada'],
         ];
     }, $s->fetchAll());
 
