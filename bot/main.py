@@ -26,9 +26,10 @@ def main() -> int:
     parser.add_argument("--intervalo", type=int, default=60, help="segundos entre varreduras no modo loop")
     parser.add_argument(
         "--backend",
-        # TEMPORÁRIO: Claude (claude/cli) desativado — só Ollama por enquanto.
+        # TEMPORÁRIO: Claude (claude/cli) desativado — só Ollama/rolhama por enquanto.
         # Para reativar, restaure as escolhas ["auto", "claude", "ollama", "cli"].
-        choices=["auto", "ollama"],
+        # 'rolhama' = extrai via o concentrador rolhama (bddphp -> ollama na .90).
+        choices=["auto", "ollama", "rolhama"],
         help="backend de IA (sobrepõe KDD_IA_BACKEND; padrão: o do ambiente/~/.env)",
     )
     parser.add_argument(
