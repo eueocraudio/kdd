@@ -388,3 +388,24 @@ function constelacao(): void
         'homonimos' => $homonimos,
     ]);
 }
+
+/* ───────────────────────── Catálogo de trilhas ───────────────────────── */
+
+/**
+ * GET /catalogo — o catálogo de termos/paths conhecidos por trilha
+ * (api/data/catalogo_trilhas.json, versionado no repo e curável em PR).
+ * O bot consome por aqui ao processar fontes (Passo 1 — docs/catalogo-trilhas.md);
+ * o arquivo NÃO é empacotado no deploy do bot.
+ */
+function catalogo_obter(): void
+{
+    $arquivo = APP_ROOT . '/data/catalogo_trilhas.json';
+    if (!is_file($arquivo)) {
+        json_error('Catálogo não disponível neste deploy', 404);
+    }
+    $dados = json_decode((string) file_get_contents($arquivo), true);
+    if (!is_array($dados) || !isset($dados['trilhas'])) {
+        json_error('Catálogo malformado', 500);
+    }
+    json_out($dados);
+}

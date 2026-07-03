@@ -63,6 +63,11 @@ class KddClient:
         r = self._s.patch(self._url(f"/fontes/{fonte_id}"), json=corpo, timeout=self._timeout)
         return self._ok(r)
 
+    def obter_catalogo(self) -> dict[str, Any]:
+        """GET /catalogo — termos/paths conhecidos por trilha (Passo 1)."""
+        r = self._s.get(self._url("/catalogo"), timeout=self._timeout)
+        return self._ok(r)
+
     def enviar_mapa(self, fonte_id: int, conceitos: list[dict], proposicoes: list[dict]) -> dict[str, Any]:
         corpo = {"conceitos": conceitos, "proposicoes": proposicoes}
         r = self._s.post(self._url(f"/fontes/{fonte_id}/mapas"), json=corpo, timeout=self._timeout)

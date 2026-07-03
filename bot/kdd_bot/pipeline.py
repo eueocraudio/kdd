@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .api_client import KddClient
+from .catalogo import conceitos_do_catalogo, fundir_no_mapa
 from .config import Config
 from .ia.facade import IAFacade
 from .pdf import extrair_secoes, extrair_texto
@@ -19,6 +20,21 @@ class Pipeline:
         self._cfg = config
         self._client = client
         self._ia = ia
+        self._catalogo_cache: dict | None = None   # carregado 1x por execução
+
+    def _catalogo(self) -> dict:
+        """Catálogo de trilhas (GET /catalogo), com cache por execução. Falha ao
+        buscar (ex.: API sem a rota ainda) NÃO derruba o processamento — só loga
+        e segue sem os conceitos automáticos."""
+        if self._catalogo_cache is None:
+            try:
+                self._catalogo_cache = self._client.obter_catalogo()
+                n = sum(len(v) for v in (self._catalogo_cache.get("trilhas") or {}).values())
+                log.info("catálogo de trilhas carregado: %d termo(s)", n)
+            except Exception as e:  # noqa: BLE001 — o catálogo é um extra
+                log.warning("catálogo de trilhas indisponível (%s); seguindo sem ele", e)
+                self._catalogo_cache = {}
+        return self._catalogo_cache
 
     def processar_pendentes(self, limite: int | None = None) -> int:
         """Processa as fontes pendentes. ``limite`` > 0 processa no máximo essa
@@ -58,6 +74,13 @@ class Pipeline:
                 fid, len(mapa["areas"]), len(mapa["conceitos"]), len(mapa["proposicoes"]),
             )
 
+            # Passo 1: termos do catálogo achados no texto viram conceitos, mesmo
+            # que a IA não os tenha citado (docs/catalogo-trilhas.md).
+            extras = conceitos_do_catalogo(texto, self._catalogo())
+            n_cat = fundir_no_mapa(mapa, extras)
+            if n_cat:
+                log.info("[fonte %s] catálogo: +%d conceito(s) auto-adicionado(s)", fid, n_cat)
+
             if mapa["areas"]:
                 self._client.atualizar_status(fid, "processando", areas=mapa["areas"])
 
@@ -91,6 +114,10 @@ class Pipeline:
         log.info("[fonte %s] modo seções: %d seção(ões) de ~%d chars",
                  fid, n, self._cfg.chars_por_secao)
 
+        # Passo 1 no modo seções: casa o catálogo sobre TODAS as seções e manda os
+        # conceitos num push extra ao final (só se alguma seção foi processada).
+        extras_catalogo = conceitos_do_catalogo("\n".join(secoes), self._catalogo())
+
         total_c = total_p = 0
         for i, secao in enumerate(secoes, start=1):
             titulo_secao = f"{titulo} — seção {i}/{n}"
@@ -114,6 +141,12 @@ class Pipeline:
             self._client.atualizar_status(fid, "erro")
             log.error("[fonte %s] todas as %d seção(ões) falharam na extração; marcada como erro", fid, n)
             return False
+
+        if extras_catalogo:
+            res = self._client.enviar_mapa(fid, extras_catalogo, [])
+            total_c += len(extras_catalogo)
+            log.info("[fonte %s] catálogo: +%d conceito(s) auto-adicionado(s) (push: %s)",
+                     fid, len(extras_catalogo), res.get("ok"))
 
         # garante status processado (cada push já marca, mas reforça)
         self._client.atualizar_status(fid, "processado")

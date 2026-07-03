@@ -98,6 +98,11 @@ if ($method === 'GET' && $path === '/constelacao') {
     constelacao();
 }
 
+// Catálogo de termos/paths conhecidos por trilha (Passo 1 — docs/catalogo-trilhas.md).
+if ($method === 'GET' && $path === '/catalogo') {
+    catalogo_obter();
+}
+
 // --- Editor manual de mapas (escrita; exige perfil validador) ---
 if ($path === '/proposicoes' && $method === 'POST') {
     proposicao_criar($auth);
