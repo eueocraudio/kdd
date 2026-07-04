@@ -32,6 +32,18 @@ function request_path(): string
 {
     $uri  = $_SERVER['REQUEST_URI'] ?? '/';
     $path = parse_url($uri, PHP_URL_PATH) ?: '/';
+
+    // Desconta o diretório do front controller quando a API não está na raiz
+    // do domínio (ex.: /kdd/health -> /health). Sem isso, nenhuma rota bate
+    // quando a API é servida sob subdiretório (ver rolhama/CORRECAO.md).
+    $scriptDir = rtrim(str_replace('\\', '/', dirname((string) ($_SERVER['SCRIPT_NAME'] ?? '/index.php'))), '/');
+    if ($scriptDir !== '' && str_starts_with($path, $scriptDir)) {
+        $path = substr($path, strlen($scriptDir));
+        if ($path === '') {
+            $path = '/';
+        }
+    }
+
     if ($path !== '/') {
         $path = rtrim($path, '/');
     }

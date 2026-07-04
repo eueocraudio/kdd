@@ -15,13 +15,22 @@ O ponto de instalação em produção é **o diretório que contém o arquivo-ma
 - **NUNCA** altere, mova ou remova esse arquivo. Ele não é do KDD — é o selo que
   identifica o alvo. O deploy só envia os arquivos da API, jamais o marcador.
 
-Diretório atual (confirmado pelo marcador em 2026-07-01):
+Diretório atual (migrado em 2026-07-04 — saindo do subdomínio auto-gerado da Hostinger,
+indo pro domínio próprio; ver `~/desenv/rolhama/CORRECAO.md` pelo mesmo tipo de migração
+feita antes pro bddphp):
 
 ```
-/home/u944249633/domains/paleturquoise-dunlin-206466.hostingersite.com/public_html/
+/home/u944249633/domains/wellington.tec.br/public_html/kdd/
 ```
 
-Isso bate com `KDD_APP_URL=https://paleturquoise-dunlin-206466.hostingersite.com` (em `~/.env`).
+Isso bate com `KDD_APP_URL=https://wellington.tec.br/kdd` (em `~/.env`). Como a API passou a
+rodar sob **subdiretório** (antes vivia na raiz do domínio `paleturquoise-dunlin-206466.
+hostingersite.com/`), `request_path()` (`api/src/http.php`) precisou descontar o prefixo do
+`SCRIPT_NAME` antes de comparar rotas — sem isso toda rota cai em 404 (mesmo bug do bddphp).
+
+O marcador (`96095eb4-…txt`) e o conteúdo antigo **ainda existem** em
+`/home/u944249633/domains/paleturquoise-dunlin-206466.hostingersite.com/public_html/`
+(não apagados ainda — pendente de decisão de quando desligar de vez esse domínio).
 
 ## Acesso SSH (Hostinger)
 
@@ -43,7 +52,7 @@ SSH='sshpass -e ssh -o PreferredAuthentications=password -o PubkeyAuthentication
 
 1. **Confirmar o alvo** (aborta se o marcador não existir):
    ```bash
-   DIR=~/domains/paleturquoise-dunlin-206466.hostingersite.com/public_html
+   DIR=~/domains/wellington.tec.br/public_html/kdd
    $SSH "test -f $DIR/96095eb4-24eb-4fec-a3c6-fceeab340e47.txt && echo ALVO_OK || echo ABORTA"
    ```
 2. **Enviar os arquivos da API** — apenas o código; **nunca** `.env`, `tokens.json`,

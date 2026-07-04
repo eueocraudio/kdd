@@ -220,7 +220,7 @@ pronta** — ela é **derivada no momento da leitura, via JOIN/agregação**:
   - **Layout concreto na Hostinger** (SSH cai em `/home/u944249633/`; só `public_html` é
     servido):
     ```
-    /home/u944249633/domains/paleturquoise-dunlin-206466.hostingersite.com/
+    /home/u944249633/domains/wellington.tec.br/public_html/kdd/
     ├── public_html/     ← conteúdo de api/public/  (index.php, .htaccess)
     ├── src/             ← fora da web
     ├── migrations/

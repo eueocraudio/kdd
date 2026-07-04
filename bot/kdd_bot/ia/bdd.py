@@ -136,6 +136,8 @@ class Client:
         self.scheme = u.scheme or "https"
         self.host = u.hostname
         self.port = u.port
+        # prefixo quando o servidor está sob subdiretório (ex.: "/bddphp"); "" na raiz
+        self.base_path = u.path.rstrip("/")
         self.secret = secret
 
     def _conn(self, timeout: int):
@@ -147,7 +149,7 @@ class Client:
         conn = self._conn(timeout)
         try:
             headers = {"content-type": "application/octet-stream"} if body else {}
-            conn.request(method, path, body=body, headers=headers)
+            conn.request(method, self.base_path + path, body=body, headers=headers)
             resp = conn.getresponse()
             data = resp.read()
             return resp.status, data
