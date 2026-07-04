@@ -77,7 +77,7 @@ class Config:
             anthropic_api_key=pega("ANTHROPIC_API_KEY", "KDD_ANTHROPIC_API_KEY"),
             ollama_url=pega("KDD_OLLAMA_URL", padrao="http://localhost:11434").rstrip("/"),
             ollama_model=pega("KDD_OLLAMA_MODEL", padrao="qwen2.5:7b-instruct"),
-            rolhama_url=pega("ROLHAMA_BDD_URL", padrao="https://darkgoldenrod-gnat-566022.hostingersite.com").rstrip("/"),
+            rolhama_url=pega("ROLHAMA_BDD_URL", padrao="https://wellington.tec.br/bddphp").rstrip("/"),
             rolhama_key=pega("ROLHAMA_BDD_KEY"),
             rolhama_channel=pega_int("ROLHAMA_CHANNEL", "505"),
             rolhama_model=pega("ROLHAMA_OLLAMA_MODEL", "KDD_OLLAMA_MODEL", padrao="qwen2.5:14b-instruct"),
