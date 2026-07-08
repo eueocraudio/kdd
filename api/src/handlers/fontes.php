@@ -331,6 +331,15 @@ function fontes_mapas(int $id): void
 
     $pdo->beginTransaction();
     try {
+        // ── 0. REPLACE (não acumular): remove os vínculos DESTA fonte antes de reinserir.
+        // Reprocessar uma fonte SUBSTITUI o mapa dela em vez de empilhar (senão conceitos de
+        // uma extração antiga/errada ficariam pra sempre — ex.: aula de APT com conceitos de
+        // Redes). Só os links POR-FONTE: conceitos, proposições e áreas globais permanecem
+        // (são deduplicados e compartilhados por várias fontes). fonte_area NÃO é limpo aqui
+        // (preserva a área-raiz = contexto criada na ingestão). ──
+        $pdo->prepare("DELETE FROM conceito_fonte WHERE fonte_id = ?")->execute([$id]);
+        $pdo->prepare("DELETE FROM referencia    WHERE fonte_id = ?")->execute([$id]);
+
         // ── 1. Upsert de conceitos; monta mapa rotulo→conceito_id ──
         $mapa_rotulo   = [];   // rotulo (minusc.) → conceito_id (namespace do push)
         $ids_conceitos = [];   // set de conceito_id distintos tocados (p/ contagem)
