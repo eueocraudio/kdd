@@ -28,7 +28,7 @@ def main() -> int:
         "--backend",
         # TEMPORÁRIO: Claude (claude/cli) desativado — só Ollama/rolhama por enquanto.
         # Para reativar, restaure as escolhas ["auto", "claude", "ollama", "cli"].
-        # 'rolhama' = extrai via o concentrador rolhama (bddphp -> ollama na .90).
+        # 'rolhama' = extrai via o concentrador rolhama (webapi -> ollama na .90).
         choices=["auto", "ollama", "rolhama"],
         help="backend de IA (sobrepõe KDD_IA_BACKEND; padrão: o do ambiente/~/.env)",
     )

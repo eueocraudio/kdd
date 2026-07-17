@@ -1,10 +1,13 @@
-"""Backend rolhama: extrai o mapa via o CONCENTRADOR rolhama (bddphp -> ollama na .90).
+"""Backend rolhama: extrai o mapa via o CONCENTRADOR rolhama (webapi -> ollama na .90).
 
 Em vez de bater direto no ollama (o que colidiria com os outros consumidores no slot
-único), sela o pedido num canal do bddphp; o concentrador rolhama (thread única) executa
-UM por vez e devolve a resposta. Manda `format=json` para forçar JSON válido (saída
-estruturada) — o modelo default é o qwen2.5:14b-instruct. A saída passa por `normalizar`
-na fachada, como os outros backends.
+único), enfileira o pedido num canal do rolhama (webapi PHP+MySQL): `enqueue` devolve o
+UUID do job e o worker (thread única) executa UM por vez e publica a resposta, lida pelo
+job. Manda `format=json` para forçar JSON válido (saída estruturada) — o modelo default é
+o qwen2.5:14b-instruct. A saída passa por `normalizar` na fachada, como os outros backends.
+
+O payload continua cifrado ponta a ponta pelo `bdd.py` (ChaCha20-Poly1305 por
+`(part, canal)`); o `webapi.py` cuida só do transporte e do MAC de autenticação (K_auth).
 """
 from __future__ import annotations
 
@@ -13,7 +16,7 @@ import json
 import time
 from typing import Any
 
-from . import bdd
+from . import bdd, webapi
 from .schema import MAPA_SCHEMA, SYSTEM, instrucao_usuario
 
 
@@ -25,6 +28,7 @@ class RolhamaBackend:
         if not key:
             raise RuntimeError("Backend rolhama: defina ROLHAMA_BDD_KEY no ambiente ou ~/.env.")
         self._url = url
+        self._key = key                                    # necessário para o k_auth do webapi
         self._secret = hashlib.sha256(key.encode()).digest()
         self._channel = int(channel)
         self._model = model or ""
@@ -43,22 +47,19 @@ class RolhamaBackend:
         if self._model:
             pedido["model"] = self._model
 
-        c = bdd.Client(self._url, self._secret)
-        # canal é um-por-um: limpa restos antes de selar.
-        c.remove("request", self._channel)
-        c.remove("response", self._channel)
-        status = c.send("request", self._channel,
-                        json.dumps(pedido, ensure_ascii=False).encode("utf-8"))
-        if status != 201:
-            raise RuntimeError(f"rolhama: PUT request devolveu {status} (canal {self._channel} ocupado?)")
+        # Fila por canal: enfileira o pedido cifrado e acompanha o MEU job pelo UUID.
+        # Sem 409/remove() — a fila aceita vários jobs; o worker executa um por vez.
+        api = webapi.ClientAPI(self._url, self._channel, webapi.k_auth(self._key, self._channel))
+        job = api.enqueue(bdd.seal(self._secret, "request", self._channel,
+                                   json.dumps(pedido, ensure_ascii=False).encode("utf-8")))
 
         t0 = time.time()
         while time.time() - t0 < self._wait_total:
-            resp = c.receive("response", self._channel, wait=self._poll)
+            resp = api.response(job, wait=self._poll)
             if resp is not None:
-                texto_resp = resp.decode("utf-8", "replace")
+                texto_resp = bdd.open_blob(self._secret, "response", self._channel, resp).decode("utf-8", "replace")
                 try:
                     return json.loads(texto_resp)
                 except json.JSONDecodeError as e:
                     raise RuntimeError(f"rolhama devolveu JSON inválido: {e}") from e
-        raise RuntimeError(f"rolhama: sem resposta após {self._wait_total:.0f}s (canal {self._channel})")
+        raise RuntimeError(f"rolhama: sem resposta após {self._wait_total:.0f}s (job {job}, canal {self._channel})")

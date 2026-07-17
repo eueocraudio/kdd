@@ -99,13 +99,15 @@ Os venvs já existem em `bot/.venv` e `desktop/.venv` (gitignorados). Para recri
 - **API → Hostinger**: seguir `DEPLOY.md`. Regra **obrigatória**: só implantar no diretório que contém o arquivo-marcador (`96095eb4-….txt`) — sem marcador, **abortar**; nunca alterar/mover o marcador nem sobrescrever `.env`, `tokens.json` ou `storage/` do servidor. SSH por senha (`SSH_HOSTINGER_*` em `~/.env`).
 - **Bot → .90** (a máquina do ollama): seguir `deploy/BOT-90.md` — tar+ssh do `bot/`, unit systemd `deploy/kdd_bot.service`, backend `rolhama`. Bot e desktop **não** vão pra Hostinger.
 
-**Não há framework de testes** (pytest etc.). A verificação é por scripts em `bot/exemplos/` que batem na API real.
+**Não há framework de testes** (pytest etc.). A verificação é por scripts que batem na API real:
+- `bot/exemplos/` — scripts contra a **API de produção** (`teste_ponta_a_ponta.py`, `teste_catalogo.py`), usam `~/.env`.
+- `teste/` — E2E do **Passo 1** num ambiente **local descartável**: `e2e_catalogo.sh` monta MySQL local (`kdd_local`) + cópia da `api/` em scratch com `.env`/`tokens.json` apontando pro local (NUNCA toca em prod), roda migrations, sobe `php -S`, executa o teste do catálogo e derruba tudo. Documentado em `teste/E2E.md` e `teste/COMO_EXECUTAR.md`.
 
 ## Fachada de IA (`bot/kdd_bot/ia/`)
 
 `IAFacade.a_partir_de(config)` escolhe o backend por `KDD_IA_BACKEND`:
 - `ollama` — `OllamaBackend`, local, HTTP direto com `format=json`. Modelo padrão `qwen2.5:7b-instruct` (~4.7 GB), dimensionado para a máquina-alvo (i5-6200U, ~11 GB RAM, sem GPU). Lento em CPU (~4–6 min/extração).
-- `rolhama` — `RolhamaBackend`: **o backend do bot em produção (na .90)**. Não bate direto no ollama (colidiria com os outros consumidores do slot único): sela o pedido num canal do bddphp e o concentrador **rolhama** (thread única) executa um por vez e devolve a resposta (`bdd.py` é o cliente). Config: `ROLHAMA_BDD_URL`, `ROLHAMA_BDD_KEY` (obrigatória), `ROLHAMA_CHANNEL` (505 = canal reservado ao KDD) e `ROLHAMA_OLLAMA_MODEL` (em prod: `qwen2.5:14b-instruct`).
+- `rolhama` — `RolhamaBackend`: **o backend do bot em produção (na .90)**. Não bate direto no ollama (colidiria com os outros consumidores do slot único): **enfileira** o pedido num canal do **webapi** (`enqueue` → UUID do job) e o worker **rolhama** (thread única) executa um por vez; a resposta é lida pelo job (`webapi.py` = transporte + MAC de autenticação; `bdd.py` = cifra ChaCha20-Poly1305 do payload, ponta a ponta). **Migrado do bddphp antigo** (que fazia canal um-por-um com 409/`remove()`) para a fila por job do webapi — ver `../rolhama/LEGADO.md`. Config: `ROLHAMA_WEBAPI_URL` (default `https://wellington.tec.br/rolhama`; `ROLHAMA_BDD_URL` ainda aceito como fallback), `ROLHAMA_BDD_KEY` (obrigatória, inalterada), `ROLHAMA_CHANNEL` (505 = canal reservado ao KDD) e `ROLHAMA_OLLAMA_MODEL` (em prod: `qwen2.5:14b-instruct`).
 - `auto` (padrão) — resolve **sempre** para `ollama` (local, sem custo).
 - `claude` — `ClaudeBackend`, nuvem, *tool use* forçado, padrão `claude-sonnet-4-6`. **DESATIVADO temporariamente** (ver abaixo).
 - `cli` — `CliBackend`, usa o CLI `claude` em modo `-p --json-schema` sem `ANTHROPIC_API_KEY` própria. **Consome crédito do Claude Code. DESATIVADO temporariamente** (ver abaixo).
