@@ -4,6 +4,22 @@
 > idealizador. Itens marcados como **🟡 PENDENTE** ainda precisam de decisão.
 > Última atualização: 2026-06-21.
 
+> ## ⚠️ Esta é a FUNDAÇÃO — camadas posteriores mudaram parte dela
+>
+> Documento de 2026-06-21. O sistema evoluiu desde então e **alguns pontos aqui foram
+> superados**. Onde divergir, vale a spec específica. Índice completo em
+> [`README.md`](README.md). O que mudou:
+>
+> | Aqui diz | Hoje é | Onde |
+> |---|---|---|
+> | três soluções | **quatro** — entrou o servidor **MCP** | [`mcp-servidor.md`](mcp-servidor.md) |
+> | identidade = **sentido** | identidade = **(universo, país, sentido)** | [`universos.md`](universos.md) §2 · [`idioma-pais.md`](idioma-pais.md) §4 |
+> | aprovação humana por fonte libera a certeza | **o que entrou está aprovado**; o humano age por **veto** | [`valor-conhecimento.md`](valor-conhecimento.md) §4 |
+> | certeza = contagem de fontes aprovadas | certeza continua, e entrou o **valor 0–100** por proposição | [`valor-conhecimento.md`](valor-conhecimento.md) §3 |
+> | nada sobre idioma | **idioma no rótulo**; o sentido tem a língua do universo | [`idioma-pais.md`](idioma-pais.md) §3 |
+> | sem camada vetorial | **embeddings** por conceito, para quase-duplicatas e contrapartes | [`valor-conhecimento.md`](valor-conhecimento.md) §6 |
+> | sem sentimento | **polaridade e subjetividade** por proposição, medidas em inglês | [`sentimento.md`](sentimento.md) |
+
 ---
 
 ## 1. Visão geral
@@ -32,6 +48,8 @@ interliga formando uma **"constelação"** de conhecimento.
 ---
 
 ## 2. Arquitetura — três soluções em torno de um núcleo
+<!-- ⚠️ Hoje são QUATRO: entrou o servidor MCP (mcp/), adaptador fino sobre a API que expõe
+     o armazém como ferramentas para agentes de IA. Ver mcp-servidor.md. -->
 
 ```
    [BOT com IA]                    [App PySide]                 [Outros programas
@@ -62,6 +80,9 @@ loop** — a IA *propõe e calcula*, o humano *modera fontes*, tudo *versionado*
 
 ### 3.1 Conceito (sentido)
 - A identidade do conceito vive no nível do **sentido**, não do rótulo.
+  - ⚠️ **SUPERADO:** a identidade passou a ser **`(universo, país, sentido)`**. Dentro de um
+    universo e de um país, continua sendo o sentido. Ver [`universos.md`](universos.md) §2 e
+    [`idioma-pais.md`](idioma-pais.md) §4.
 - O par **(rótulo + área)** desambigua, mas o mesmo sentido pode ter vários rótulos
   (sinônimos/apelidos) e pertencer a várias áreas.
 - Exemplos:

@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "kdd": {
+      "command": "./mcp/.venv/bin/python",
+      "args": ["-m", "kdd_mcp"],
+      "env": { "PYTHONPATH": "./mcp" }
+    }
+  }
+}

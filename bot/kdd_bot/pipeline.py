@@ -8,6 +8,7 @@ from typing import Any
 
 from .api_client import KddClient
 from .catalogo import conceitos_do_catalogo, fundir_no_mapa
+from .sentimento import enriquecer_proposicoes as medir_sentimento
 from .config import Config
 from .ia.facade import IAFacade
 from .pdf import extrair_secoes, extrair_texto
@@ -52,6 +53,31 @@ class Pipeline:
                 ok += 1
         return ok
 
+    @staticmethod
+    def _medir_sentimento(fid: int, mapa: dict[str, Any]) -> None:
+        """Mede polaridade/subjetividade das proposições (docs/sentimento.md).
+
+        Roda aqui, no bot, porque a análise é em Python (vaderSentiment + TextBlob) e sobre
+        a forma INGLESA da proposição — em pt-BR a base é pobre e erra muito. A API só
+        guarda e agrega. Proposição sem forma inglesa fica SEM medição, de propósito.
+        """
+        props = mapa.get("proposicoes") or []
+        if not props:
+            return
+        # rótulo em inglês do conceito, quando a IA marcou idioma='en' — melhora o texto
+        # analisado (o agente malicioso da origem inverte a polaridade do verbo).
+        rotulos_en = {
+            c["rotulo"]: c["rotulo"]
+            for c in (mapa.get("conceitos") or [])
+            if str(c.get("idioma", "")).lower().startswith("en")
+        }
+        # a origem é relevante para o ajuste de domínio, então passamos o rótulo cru também
+        for c in (mapa.get("conceitos") or []):
+            rotulos_en.setdefault(c["rotulo"], c["rotulo"])
+        n = medir_sentimento(props, rotulos_en)
+        log.info("[fonte %s] sentimento: %d/%d proposição(ões) medida(s) em inglês",
+                 fid, n, len(props))
+
     def processar_fonte(self, fonte: dict[str, Any]) -> bool:
         fid = int(fonte["id"])
         titulo = fonte.get("titulo") or f"fonte {fid}"
@@ -83,6 +109,8 @@ class Pipeline:
 
             if mapa["areas"]:
                 self._client.atualizar_status(fid, "processando", areas=mapa["areas"])
+
+            self._medir_sentimento(fid, mapa)
 
             res = self._client.enviar_mapa(fid, mapa["conceitos"], mapa["proposicoes"])
             log.info("[fonte %s] enviado: %s", fid, res)
@@ -128,6 +156,7 @@ class Pipeline:
                 continue
             if mapa["areas"]:
                 self._client.atualizar_status(fid, "processando", areas=mapa["areas"])
+            self._medir_sentimento(fid, mapa)
             res = self._client.enviar_mapa(fid, mapa["conceitos"], mapa["proposicoes"])
             total_c += len(mapa["conceitos"])
             total_p += len(mapa["proposicoes"])

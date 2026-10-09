@@ -21,6 +21,9 @@ class KddClient:
         self._timeout = timeout
         self._s = requests.Session()
         self._s.headers.update({"X-Token": config.token, "Accept": "application/json"})
+        # Universo ATIVO (slug). Vazio = o padrão da API ('principal'). Trocar este
+        # atributo redireciona toda a leitura do cliente — ver _get.
+        self.universo: str = ""
 
     @staticmethod
     def _corpo_json(r: requests.Response) -> dict[str, Any]:
@@ -40,12 +43,30 @@ class KddClient:
 
     def _get(self, caminho: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         url = f"{self._cfg.base_url}{caminho}"
+        # UNIVERSO injetado aqui, num só lugar (docs/universos.md): trocar o universo no
+        # seletor muda TODA a leitura do cliente sem tocar em nenhuma chamada da UI.
+        if self.universo:
+            params = dict(params or {})
+            params.setdefault("universo", self.universo)
         try:
             r = self._s.get(url, params=params, timeout=self._timeout)
         except requests.RequestException as e:  # rede
             raise KddApiError(f"Falha de rede: {e}") from e
         self._levantar_se_erro(r)
         return self._corpo_json(r)
+
+    def universos(self) -> list[dict[str, Any]]:
+        """GET /universos — os domínios de conhecimento isolados."""
+        # sem o filtro de universo (a própria lista é global)
+        u, self.universo = self.universo, ""
+        try:
+            return self._get("/universos").get("universos", [])
+        finally:
+            self.universo = u
+
+    def contrapartes(self, conceito_id: int) -> dict[str, Any]:
+        """GET /conceitos/{id}/contrapartes — o gêmeo nos universos paralelos."""
+        return self._get(f"/conceitos/{conceito_id}/contrapartes")
 
     def pode_editar(self) -> bool:
         """True se há token de validador configurado (editor exige escrita)."""
@@ -113,7 +134,8 @@ class KddClient:
                 r = self._s.post(
                     url,
                     files={"arquivo": (Path(caminho).name, fh, mime)},
-                    data={"titulo": titulo} if titulo else {},
+                    data={k: v for k, v in {"titulo": titulo,
+                                            "universo": self.universo or None}.items() if v},
                     timeout=180,
                 )
         except (requests.RequestException, OSError) as e:
@@ -126,10 +148,24 @@ class KddClient:
             raise KddApiError(f"HTTP {r.status_code}: {js.get('erro') or r.text}")
         return {"duplicado": False, **js}
 
+    def esteios(self, limite: int = 20) -> list[dict[str, Any]]:
+        """GET /esteios — conceitos-pilar (maior grau no grafo)."""
+        return self._get("/esteios", {"limite": limite}).get("esteios", [])
+
+    def similares(self, minimo: float = 0.85, limite: int = 50) -> list[dict[str, Any]]:
+        """GET /similares — quase-duplicatas da camada vetorial (sugestão de merge)."""
+        return self._get("/similares", {"min": minimo, "limite": limite}).get("similares", [])
+
     # --- Endpoints de escrita (editor; exigem perfil validador) ---
-    def criar_conceito(self, sentido: str, rotulo_principal: str, areas: list[str]) -> dict[str, Any]:
+    def criar_conceito(self, sentido: str, rotulo_principal: str, areas: list[str],
+                       tipo: str | None = None) -> dict[str, Any]:
         return self._escrita("POST", "/conceitos",
-                              {"sentido": sentido, "rotulo_principal": rotulo_principal, "areas": areas})
+                              {"sentido": sentido, "rotulo_principal": rotulo_principal,
+                               "areas": areas, "tipo": tipo, "universo": self.universo or None})
+
+    def editar_conceito_tipo(self, conceito_id: int, tipo: str | None) -> dict[str, Any]:
+        """PATCH /conceitos/{id} {tipo} — entra no cálculo do valor das proposições."""
+        return self._escrita("PATCH", f"/conceitos/{conceito_id}", {"tipo": tipo})
 
     def editar_conceito(self, conceito_id: int, sentido: str) -> dict[str, Any]:
         return self._escrita("PATCH", f"/conceitos/{conceito_id}", {"sentido": sentido})
@@ -145,6 +181,7 @@ class KddClient:
         return self._escrita("DELETE", f"/rotulos/{rotulo_id}")
 
     def add_area_conceito(self, conceito_id: int, nome: str) -> dict[str, Any]:
+        # a área nasce no universo DO CONCEITO (a API resolve) — nada a enviar aqui
         return self._escrita("POST", f"/conceitos/{conceito_id}/areas", {"nome": nome})
 
     def rem_area_conceito(self, conceito_id: int, area_id: int) -> dict[str, Any]:
@@ -171,7 +208,10 @@ class KddClient:
         return self._escrita("DELETE", f"/proposicoes/{prop_id}")
 
     def criar_area(self, nome: str, parent_id: int | None = None) -> dict[str, Any]:
-        return self._escrita("POST", "/areas", {"nome": nome, "parent_id": parent_id})
+        # o universo entra no corpo (a API resolve por slug)
+        return self._escrita("POST", "/areas",
+                             {"nome": nome, "parent_id": parent_id,
+                              "universo": self.universo or None})
 
     def aprovar_fonte(self, fonte_id: int) -> dict[str, Any]:
         return self._escrita("POST", f"/fontes/{fonte_id}/aprovar")

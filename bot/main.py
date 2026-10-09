@@ -18,6 +18,7 @@ from kdd_bot.api_client import KddClient
 from kdd_bot.config import Config
 from kdd_bot.ia.facade import IAFacade
 from kdd_bot.pipeline import Pipeline
+from kdd_bot.vetor import vetorizar
 
 
 def main() -> int:
@@ -53,6 +54,12 @@ def main() -> int:
         default=None,
         help="limita o nº de seções processadas por documento (sobrepõe KDD_MAX_SECOES; 0 = todas).",
     )
+    parser.add_argument(
+        "--vetorizar",
+        action="store_true",
+        help="em vez de processar fontes: embute os conceitos que faltam e recalcula os "
+             "conceitos semelhantes (camada vetorial — docs/valor-conhecimento.md §6).",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -70,10 +77,22 @@ def main() -> int:
         if args.max_secoes is not None:
             config = dataclasses.replace(config, max_secoes=args.max_secoes)
         client = KddClient(config)
-        ia = IAFacade.a_partir_de(config)
+        # A vetorização não usa LLM de extração: não monta a fachada de IA (nem exige backend).
+        ia = None if args.vetorizar else IAFacade.a_partir_de(config)
     except RuntimeError as e:
         print(f"Configuração inválida: {e}", file=sys.stderr)
         return 1
+
+    # Passada da camada vetorial (embeddings + semelhantes), sem tocar na fila de fontes.
+    if args.vetorizar:
+        try:
+            res = vetorizar(client, config)
+        except Exception:  # noqa: BLE001
+            log.exception("falha na vetorização")
+            return 1
+        log.info("vetorização concluída: %d embutido(s), %d vetorizado(s), %d par(es)",
+                 res["embutidos"], res["total"], res["pares"])
+        return 0
 
     # Proteção de crédito: backends pagos avisam e, sem --max-fontes, limitam a 1/execução.
     PAGOS = {"cli", "claude"}

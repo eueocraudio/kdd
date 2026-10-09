@@ -19,8 +19,11 @@ declare(strict_types=1);
  */
 function areas_arvore(): void
 {
-    $pdo  = kdd_db();
-    $rows = $pdo->query("SELECT id, nome, parent_id FROM area ORDER BY nome")->fetchAll();
+    $pdo = kdd_db();
+    $uid = kdd_universo_req($pdo);
+    $s = $pdo->prepare("SELECT id, nome, parent_id FROM area WHERE universo_id = ? ORDER BY nome");
+    $s->execute([$uid]);
+    $rows = $s->fetchAll();
 
     $por_id = [];
     foreach ($rows as $r) {
@@ -42,7 +45,7 @@ function areas_arvore(): void
         }
     }
 
-    json_out(['areas' => $raiz]);
+    json_out(['universo' => kdd_universo_resumo($pdo, $uid), 'areas' => $raiz]);
 }
 
 /* ─────────────────────── Conceitos ──────────────────────── */
@@ -54,6 +57,9 @@ function areas_arvore(): void
 function conceitos_listar(): void
 {
     $pdo    = kdd_db();
+    $uid    = kdd_universo_req($pdo);
+    $idioma = kdd_idioma_req();
+    $pais   = kdd_pais_req();
     $q      = trim((string) ($_GET['q']    ?? ''));
     // ?area aceita id único ou lista CSV (?area=1,2,3) — semântica de UNIÃO
     // (conceitos em QUALQUER das áreas). Retrocompatível com ?area=1.
@@ -70,8 +76,15 @@ function conceitos_listar(): void
     // ?fonte=<id> — "lente de contexto": só conceitos daquela fonte (proveniência).
     $fonteId = isset($_GET['fonte']) && $_GET['fonte'] !== '' ? (int) $_GET['fonte'] : null;
 
-    $where  = [];
-    $params = [];
+    // Universo é o 1º filtro: nada de outro universo vaza daqui (docs/universos.md §8.3).
+    $where  = ['c.universo_id = ?'];
+    $params = [$uid];
+
+    // País é filtro INCLUSIVO (docs/idioma-pais.md §4): universal MAIS o do país pedido.
+    // Semântica diferente do universo de propósito — país marca jurisdição DENTRO do plano.
+    if ($filtroPais = kdd_sql_filtro_pais('c.pais', $pais)) {
+        $where[] = $filtroPais;
+    }
 
     if ($q !== '') {
         $where[]  = "EXISTS (SELECT 1 FROM rotulo rq WHERE rq.conceito_id = c.id AND rq.texto LIKE ?)";
@@ -89,7 +102,9 @@ function conceitos_listar(): void
         $params[] = $fonteId;
     }
 
-    $sql = "SELECT c.id, c.sentido, c.desabilitado,
+    // 'rotulo' = o escolhido pelo idioma (com fallback); 'rotulos' = todos, como antes.
+    $sql = "SELECT c.id, c.sentido, c.desabilitado, c.pais,
+                   " . kdd_sql_rotulo('c.id', $idioma) . " AS rotulo,
                    GROUP_CONCAT(DISTINCT r.texto ORDER BY r.principal DESC, r.texto SEPARATOR ', ') AS rotulos,
                    GROUP_CONCAT(DISTINCT a.nome  ORDER BY a.nome SEPARATOR ', ')                    AS areas
               FROM conceito c
@@ -99,7 +114,7 @@ function conceitos_listar(): void
     if ($where) {
         $sql .= " WHERE " . implode(' AND ', $where);
     }
-    $sql .= " GROUP BY c.id, c.sentido, c.desabilitado ORDER BY c.id";
+    $sql .= " GROUP BY c.id, c.sentido, c.desabilitado, c.pais ORDER BY c.id";
 
     $stmt = $pdo->prepare($sql);
     $stmt->execute($params);
@@ -110,7 +125,12 @@ function conceitos_listar(): void
         return $row;
     }, $stmt->fetchAll());
 
-    json_out(['conceitos' => $conceitos]);
+    // tipo + grau + esteio (docs/valor-conhecimento.md §3)
+    $conceitos = kdd_enriquecer_conceitos($pdo, $conceitos);
+
+    json_out(['universo' => kdd_universo_resumo($pdo, $uid),
+              'idioma' => $idioma ?: null, 'pais' => $pais ?: null,
+              'conceitos' => $conceitos]);
 }
 
 /**
@@ -120,21 +140,35 @@ function conceitos_listar(): void
 function conceitos_obter(int $id): void
 {
     $pdo  = kdd_db();
-    $stmt = $pdo->prepare("SELECT id, sentido, desabilitado, criado_em FROM conceito WHERE id = ?");
+    $idioma = kdd_idioma_req();
+    $stmt = $pdo->prepare(
+        "SELECT id, sentido, desabilitado, criado_em, universo_id, pais FROM conceito WHERE id = ?"
+    );
     $stmt->execute([$id]);
     $conceito = $stmt->fetch();
     if (!$conceito) {
         json_error('Conceito não encontrado', 404);
     }
+    // O id é global, então não se filtra por universo aqui — mas a resposta DIZ qual é.
+    $conceito['universo'] = kdd_universo_resumo($pdo, (int) $conceito['universo_id']);
+    unset($conceito['universo_id']);
     $conceito['id']           = (int) $conceito['id'];
     $conceito['desabilitado'] = (int) $conceito['desabilitado'];
 
-    // Rótulos
-    $s = $pdo->prepare("SELECT id, texto, principal FROM rotulo WHERE conceito_id = ? ORDER BY principal DESC, texto");
+    // tipo + grau + esteio do próprio conceito (docs/valor-conhecimento.md §3)
+    $conceito = kdd_enriquecer_conceitos($pdo, [$conceito])[0];
+
+    // Rótulos: TODOS, cada um com o seu idioma — é assim que o cliente mostra as traduções.
+    $s = $pdo->prepare(
+        "SELECT id, texto, idioma, principal FROM rotulo WHERE conceito_id = ?
+          ORDER BY principal DESC, idioma, texto"
+    );
     $s->execute([$id]);
     $conceito['rotulos'] = array_map(static function (array $r): array {
-        return ['id' => (int) $r['id'], 'texto' => $r['texto'], 'principal' => (bool) $r['principal']];
+        return ['id' => (int) $r['id'], 'texto' => $r['texto'], 'idioma' => $r['idioma'],
+                'principal' => (bool) $r['principal']];
     }, $s->fetchAll());
+    $conceito['idiomas'] = array_values(array_unique(array_column($conceito['rotulos'], 'idioma')));
 
     // Áreas
     $s = $pdo->prepare(
@@ -159,9 +193,26 @@ function conceitos_obter(int $id): void
     }, $s->fetchAll());
 
     // Proposições onde é ORIGEM
-    $conceito['proposicoes_origem'] = kdd_proposicoes_do_conceito($pdo, $id, 'origem');
+    $conceito['proposicoes_origem'] = kdd_proposicoes_do_conceito($pdo, $id, 'origem', $idioma);
     // Proposições onde é DESTINO
-    $conceito['proposicoes_destino'] = kdd_proposicoes_do_conceito($pdo, $id, 'destino');
+    $conceito['proposicoes_destino'] = kdd_proposicoes_do_conceito($pdo, $id, 'destino', $idioma);
+
+    // AMEAÇAS x PROTEÇÕES: as proposições que CHEGAM ao conceito, separadas pela polaridade.
+    // É a leitura que motivou a camada de sentimento (docs/sentimento.md §1): "o que ameaça
+    // este conceito?" e "o que o protege?".
+    $conceito['ameacas']   = [];
+    $conceito['protecoes'] = [];
+    foreach ($conceito['proposicoes_destino'] as $p) {
+        $rotulo = $p['sentimento']['rotulo'] ?? 'nao_medida';
+        if ($rotulo === 'negativa') {
+            $conceito['ameacas'][] = $p;
+        } elseif ($rotulo === 'positiva') {
+            $conceito['protecoes'][] = $p;
+        }
+    }
+
+    // Conceitos semanticamente semelhantes (camada vetorial — §6 da spec; vazio sem --vetorizar)
+    $conceito['similares'] = kdd_similares_do_conceito($pdo, $id, 10, $idioma);
 
     json_out(['conceito' => $conceito]);
 }
@@ -170,7 +221,8 @@ function conceitos_obter(int $id): void
  * Proposições em que o conceito participa, com o rótulo da "outra ponta" e a certeza.
  * $lado = 'origem' → lista as que saem do conceito; 'destino' → as que chegam nele.
  */
-function kdd_proposicoes_do_conceito(PDO $pdo, int $conceitoId, string $lado): array
+function kdd_proposicoes_do_conceito(PDO $pdo, int $conceitoId, string $lado,
+                                     string $idioma = ''): array
 {
     if ($lado === 'origem') {
         $col_self  = 'conceito_origem';
@@ -182,9 +234,8 @@ function kdd_proposicoes_do_conceito(PDO $pdo, int $conceitoId, string $lado): a
         $chave     = 'origem';
     }
 
-    $sql = "SELECT p.id, p.relacao, p.$col_outro AS outro_id,
-                   (SELECT texto FROM rotulo WHERE conceito_id = p.$col_outro
-                     ORDER BY principal DESC, id LIMIT 1) AS outro_rotulo,
+    $sql = "SELECT p.id, p.relacao, p.pais, p.$col_self AS self_id, p.$col_outro AS outro_id,
+                   " . kdd_sql_rotulo("p.$col_outro", $idioma) . " AS outro_rotulo,
                    v.fontes_aprovadas,
                    EXISTS (SELECT 1 FROM conceito cx
                             WHERE cx.id IN (p.conceito_origem, p.conceito_destino)
@@ -196,15 +247,25 @@ function kdd_proposicoes_do_conceito(PDO $pdo, int $conceitoId, string $lado): a
     $s = $pdo->prepare($sql);
     $s->execute([$conceitoId]);
 
-    return array_map(static function (array $r) use ($chave): array {
-        return [
+    $props = array_map(static function (array $r) use ($chave, $lado): array {
+        $item = [
             'proposicao_id'    => (int) $r['id'],
             'relacao'          => $r['relacao'],
+            'pais'             => $r['pais'],
             $chave             => ['id' => (int) $r['outro_id'], 'rotulo' => $r['outro_rotulo']],
             'fontes_aprovadas' => (int) $r['fontes_aprovadas'],
             'desabilitada'     => (int) $r['desabilitada'],
         ];
+        // ids explícitos para o cálculo do valor (removidos na saída)
+        $item['_origem_id']  = $lado === 'origem' ? (int) $r['self_id']  : (int) $r['outro_id'];
+        $item['_destino_id'] = $lado === 'origem' ? (int) $r['outro_id'] : (int) $r['self_id'];
+        return $item;
     }, $s->fetchAll());
+
+    // valor 0–100 por proposição (docs/valor-conhecimento.md §3)
+    $props = kdd_enriquecer_proposicoes($pdo, $props);
+    usort($props, static fn(array $a, array $b): int => $b['valor'] <=> $a['valor']);
+    return $props;
 }
 
 /* ────────────────────── Proposições ─────────────────────── */
@@ -216,25 +277,36 @@ function kdd_proposicoes_do_conceito(PDO $pdo, int $conceitoId, string $lado): a
 function proposicoes_listar(): void
 {
     $pdo       = kdd_db();
+    $uid       = kdd_universo_req($pdo);
+    $idioma    = kdd_idioma_req();
+    $pais      = kdd_pais_req();
+    $polar     = kdd_polaridade_req();
     $conceito  = isset($_GET['conceito']) && $_GET['conceito'] !== '' ? (int) $_GET['conceito'] : null;
 
-    $sql = "SELECT p.id, p.relacao,
+    $sql = "SELECT p.id, p.relacao, p.pais,
                    p.conceito_origem,
-                   (SELECT texto FROM rotulo WHERE conceito_id = p.conceito_origem
-                     ORDER BY principal DESC, id LIMIT 1) AS origem_rotulo,
+                   " . kdd_sql_rotulo('p.conceito_origem', $idioma) . " AS origem_rotulo,
                    p.conceito_destino,
-                   (SELECT texto FROM rotulo WHERE conceito_id = p.conceito_destino
-                     ORDER BY principal DESC, id LIMIT 1) AS destino_rotulo,
+                   " . kdd_sql_rotulo('p.conceito_destino', $idioma) . " AS destino_rotulo,
                    v.fontes_aprovadas,
                    EXISTS (SELECT 1 FROM conceito cx
                             WHERE cx.id IN (p.conceito_origem, p.conceito_destino)
                               AND cx.desabilitado = 1) AS desabilitada
               FROM proposicao p
-              JOIN vw_certeza_proposicao v ON v.proposicao_id = p.id";
-    $params = [];
+              JOIN vw_certeza_proposicao v ON v.proposicao_id = p.id
+              JOIN conceito co ON co.id = p.conceito_origem";
+    // A proposição pertence ao universo dos seus conceitos (nunca cruza), então filtrar
+    // pela origem basta.
+    $sql   .= " WHERE co.universo_id = ?";
+    $params = [$uid];
+    // País INCLUSIVO: a mesma tripla pode valer num país e não noutro.
+    if ($filtroPais = kdd_sql_filtro_pais('p.pais', $pais)) {
+        $sql .= " AND $filtroPais";
+    }
     if ($conceito !== null) {
-        $sql      .= " WHERE p.conceito_origem = ? OR p.conceito_destino = ?";
-        $params    = [$conceito, $conceito];
+        $sql     .= " AND (p.conceito_origem = ? OR p.conceito_destino = ?)";
+        $params[] = $conceito;
+        $params[] = $conceito;
     }
     $sql .= " ORDER BY v.fontes_aprovadas DESC, p.id";
 
@@ -245,6 +317,7 @@ function proposicoes_listar(): void
         return [
             'id'               => (int) $r['id'],
             'relacao'          => $r['relacao'],
+            'pais'             => $r['pais'],
             'origem'           => ['id' => (int) $r['conceito_origem'],  'rotulo' => $r['origem_rotulo']],
             'destino'          => ['id' => (int) $r['conceito_destino'], 'rotulo' => $r['destino_rotulo']],
             'fontes_aprovadas' => (int) $r['fontes_aprovadas'],
@@ -252,7 +325,23 @@ function proposicoes_listar(): void
         ];
     }, $stmt->fetchAll());
 
-    json_out(['proposicoes' => $proposicoes]);
+    // valor 0–100 + sentimento, e ordenação por valor (docs/valor-conhecimento.md §3)
+    $proposicoes = kdd_enriquecer_proposicoes($pdo, $proposicoes);
+
+    // Filtro por polaridade DEPOIS do enriquecimento: o sentimento é agregado em PHP a
+    // partir da view, não é coluna da proposição.
+    if ($polar !== '') {
+        $proposicoes = array_values(array_filter(
+            $proposicoes,
+            static fn(array $p): bool => ($p['sentimento']['rotulo'] ?? 'nao_medida') === $polar
+        ));
+    }
+    usort($proposicoes, static fn(array $a, array $b): int => $b['valor'] <=> $a['valor']);
+
+    json_out(['universo' => kdd_universo_resumo($pdo, $uid),
+              'idioma' => $idioma ?: null, 'pais' => $pais ?: null,
+              'polaridade' => $polar ?: null,
+              'proposicoes' => $proposicoes]);
 }
 
 /**
@@ -262,8 +351,9 @@ function proposicoes_listar(): void
  */
 function fonte_mapa(int $id): void
 {
-    $pdo = kdd_db();
-    $s = $pdo->prepare("SELECT id, titulo FROM fonte WHERE id = ?");
+    $pdo    = kdd_db();
+    $idioma = kdd_idioma_req();
+    $s = $pdo->prepare("SELECT id, titulo, universo_id FROM fonte WHERE id = ?");
     $s->execute([$id]);
     $fonte = $s->fetch();
     if (!$fonte) {
@@ -271,8 +361,8 @@ function fonte_mapa(int $id): void
     }
 
     $s = $pdo->prepare(
-        "SELECT c.id, c.sentido, c.desabilitado,
-                (SELECT texto FROM rotulo WHERE conceito_id = c.id ORDER BY principal DESC, id LIMIT 1) AS rotulo,
+        "SELECT c.id, c.sentido, c.desabilitado, c.pais,
+                " . kdd_sql_rotulo('c.id', $idioma) . " AS rotulo,
                 GROUP_CONCAT(DISTINCT a.nome ORDER BY a.nome SEPARATOR ', ') AS areas
            FROM conceito_fonte cf
            JOIN conceito c          ON c.id = cf.conceito_id
@@ -282,17 +372,18 @@ function fonte_mapa(int $id): void
           GROUP BY c.id, c.sentido, c.desabilitado ORDER BY c.id"
     );
     $s->execute([$id]);
-    $conceitos = array_map(static function (array $r): array {
+    $conceitos = kdd_enriquecer_conceitos($pdo, array_map(static function (array $r): array {
         return ['id' => (int) $r['id'], 'rotulo' => $r['rotulo'], 'sentido' => $r['sentido'],
-                'areas' => $r['areas'], 'desabilitado' => (int) $r['desabilitado']];
-    }, $s->fetchAll());
+                'areas' => $r['areas'], 'pais' => $r['pais'],
+                'desabilitado' => (int) $r['desabilitado']];
+    }, $s->fetchAll()));
 
     $s = $pdo->prepare(
-        "SELECT p.id, p.relacao,
+        "SELECT p.id, p.relacao, p.pais,
                 p.conceito_origem  AS origem_id,
-                (SELECT texto FROM rotulo WHERE conceito_id = p.conceito_origem  ORDER BY principal DESC, id LIMIT 1) AS origem_rotulo,
+                " . kdd_sql_rotulo('p.conceito_origem', $idioma) . " AS origem_rotulo,
                 p.conceito_destino AS destino_id,
-                (SELECT texto FROM rotulo WHERE conceito_id = p.conceito_destino ORDER BY principal DESC, id LIMIT 1) AS destino_rotulo,
+                " . kdd_sql_rotulo('p.conceito_destino', $idioma) . " AS destino_rotulo,
                 v.fontes_aprovadas,
                 EXISTS (SELECT 1 FROM conceito cx
                          WHERE cx.id IN (p.conceito_origem, p.conceito_destino)
@@ -304,18 +395,20 @@ function fonte_mapa(int $id): void
           ORDER BY p.id"
     );
     $s->execute([$id]);
-    $proposicoes = array_map(static function (array $r): array {
+    $proposicoes = kdd_enriquecer_proposicoes($pdo, array_map(static function (array $r): array {
         return [
             'id'               => (int) $r['id'],
             'relacao'          => $r['relacao'],
+            'pais'             => $r['pais'],
             'origem'           => ['id' => (int) $r['origem_id'],  'rotulo' => $r['origem_rotulo']],
             'destino'          => ['id' => (int) $r['destino_id'], 'rotulo' => $r['destino_rotulo']],
             'fontes_aprovadas' => (int) $r['fontes_aprovadas'],
             'desabilitada'     => (int) $r['desabilitada'],
         ];
-    }, $s->fetchAll());
+    }, $s->fetchAll()));
 
-    json_out(['fonte' => ['id' => (int) $fonte['id'], 'titulo' => $fonte['titulo']],
+    json_out(['fonte' => ['id' => (int) $fonte['id'], 'titulo' => $fonte['titulo'],
+                          'universo' => kdd_universo_resumo($pdo, (int) $fonte['universo_id'])],
               'conceitos' => $conceitos, 'proposicoes' => $proposicoes]);
 }
 
@@ -328,52 +421,68 @@ function fonte_mapa(int $id): void
  */
 function constelacao(): void
 {
-    $pdo = kdd_db();
+    $pdo    = kdd_db();
+    $uid    = kdd_universo_req($pdo);
+    $idioma = kdd_idioma_req();
 
     // Áreas com contagem de conceitos
-    $areas = $pdo->query(
+    $s = $pdo->prepare(
         "SELECT a.id, a.nome, COUNT(DISTINCT ca.conceito_id) AS conceitos
            FROM area a
            LEFT JOIN conceito_area ca ON ca.area_id = a.id
+          WHERE a.universo_id = ?
           GROUP BY a.id, a.nome ORDER BY a.nome"
-    )->fetchAll();
+    );
+    $s->execute([$uid]);
+    $areas = $s->fetchAll();
     $areas = array_map(static function (array $a): array {
         return ['id' => (int) $a['id'], 'nome' => $a['nome'], 'conceitos' => (int) $a['conceitos']];
     }, $areas);
 
     // Pontes interdisciplinares: proposições cuja origem e destino não compartilham área.
-    $pontes = $pdo->query(
-        "SELECT p.id, p.relacao,
+    // Dentro do universo — ponte ENTRE universos não é proposição, é contraparte (§5).
+    $s = $pdo->prepare(
+        "SELECT p.id, p.relacao, p.pais,
                 p.conceito_origem  AS origem_id,
-                (SELECT texto FROM rotulo WHERE conceito_id = p.conceito_origem  ORDER BY principal DESC, id LIMIT 1) AS origem_rotulo,
+                " . kdd_sql_rotulo('p.conceito_origem', $idioma) . " AS origem_rotulo,
                 p.conceito_destino AS destino_id,
-                (SELECT texto FROM rotulo WHERE conceito_id = p.conceito_destino ORDER BY principal DESC, id LIMIT 1) AS destino_rotulo
+                " . kdd_sql_rotulo('p.conceito_destino', $idioma) . " AS destino_rotulo
            FROM proposicao p
-          WHERE NOT EXISTS (
+           JOIN conceito co ON co.id = p.conceito_origem
+          WHERE co.universo_id = ?
+            AND NOT EXISTS (
                   SELECT 1 FROM conceito_area cao
                     JOIN conceito_area cad ON cad.area_id = cao.area_id
                    WHERE cao.conceito_id = p.conceito_origem
                      AND cad.conceito_id = p.conceito_destino)
           ORDER BY p.id"
-    )->fetchAll();
+    );
+    $s->execute([$uid]);
+    $pontes = $s->fetchAll();
     $pontes = array_map(static function (array $r): array {
         return [
             'proposicao_id' => (int) $r['id'],
             'relacao'       => $r['relacao'],
+            'pais'          => $r['pais'],
             'origem'        => ['id' => (int) $r['origem_id'],  'rotulo' => $r['origem_rotulo']],
             'destino'       => ['id' => (int) $r['destino_id'], 'rotulo' => $r['destino_rotulo']],
         ];
     }, $pontes);
 
     // Homônimos: mesmo texto de rótulo apontando para conceitos (sentidos) diferentes.
-    $homonimos = $pdo->query(
+    // Dentro do universo: o mesmo rótulo em OUTRO universo não é homônimo, é contraparte.
+    $s = $pdo->prepare(
         "SELECT r.texto, COUNT(DISTINCT r.conceito_id) AS sentidos,
                 GROUP_CONCAT(DISTINCT r.conceito_id ORDER BY r.conceito_id SEPARATOR ',') AS conceito_ids
            FROM rotulo r
+           JOIN conceito c ON c.id = r.conceito_id
+          WHERE c.universo_id = ?
           GROUP BY r.texto
          HAVING COUNT(DISTINCT r.conceito_id) > 1
           ORDER BY sentidos DESC, r.texto"
-    )->fetchAll();
+    );
+    $s->execute([$uid]);
+    $homonimos = $s->fetchAll();
     $homonimos = array_map(static function (array $h): array {
         return [
             'rotulo'       => $h['texto'],
@@ -383,10 +492,55 @@ function constelacao(): void
     }, $homonimos);
 
     json_out([
+        'universo'  => kdd_universo_resumo($pdo, $uid),
         'areas'     => $areas,
         'pontes'    => $pontes,
         'homonimos' => $homonimos,
     ]);
+}
+
+/* ───────────────────────── Esteios ───────────────────────── */
+
+/**
+ * GET /esteios?limite=20 — os conceitos-pilar do armazém: os de maior GRAU (nº de relações
+ * em que participam). Decisão V do idealizador: "no mapa conceitual um esteio bom é fonte de
+ * inúmeras relações com outros conceitos". Ver docs/valor-conhecimento.md §5.
+ */
+function esteios_listar(): void
+{
+    $pdo    = kdd_db();
+    $uid    = kdd_universo_req($pdo);
+    $idioma = kdd_idioma_req();
+    $pais   = kdd_pais_req();
+    $limite = isset($_GET['limite']) ? max(1, min(200, (int) $_GET['limite'])) : 20;
+
+    // Calculado ANTES da query: embutir `$x = ... ? ... : ''` dentro da concatenação cai na
+    // precedência do ternário em PHP e a variável sai indefinida.
+    $filtroPais = kdd_sql_filtro_pais('c.pais', $pais);
+    $andPais    = $filtroPais !== '' ? " AND $filtroPais" : '';
+
+    $s = $pdo->prepare(
+        "SELECT c.id, c.sentido, c.desabilitado, c.pais,
+                " . kdd_sql_rotulo('c.id', $idioma) . " AS rotulo,
+                (SELECT GROUP_CONCAT(DISTINCT a.nome ORDER BY a.nome SEPARATOR ', ')
+                   FROM conceito_area ca JOIN area a ON a.id = ca.area_id
+                  WHERE ca.conceito_id = c.id) AS areas
+           FROM conceito c
+           JOIN vw_grau_conceito g ON g.conceito_id = c.id
+          WHERE c.desabilitado = 0 AND c.universo_id = ?" . $andPais . "
+          ORDER BY (g.grau_saida + g.grau_entrada) DESC, c.id
+          LIMIT $limite"
+    );
+    $s->execute([$uid]);
+    $conceitos = kdd_enriquecer_conceitos($pdo, array_map(static function (array $r): array {
+        return ['id' => (int) $r['id'], 'rotulo' => $r['rotulo'], 'sentido' => $r['sentido'],
+                'areas' => $r['areas'], 'pais' => $r['pais'],
+                'desabilitado' => (int) $r['desabilitado']];
+    }, $s->fetchAll()));
+
+    json_out(['universo' => kdd_universo_resumo($pdo, $uid),
+              'idioma' => $idioma ?: null, 'pais' => $pais ?: null,
+              'esteios' => $conceitos]);
 }
 
 /* ───────────────────────── Catálogo de trilhas ───────────────────────── */

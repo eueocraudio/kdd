@@ -5,6 +5,14 @@
 > serão expandidos quando chegarmos neles.
 > Última atualização: 2026-06-21.
 
+> ## ⚠️ Plano da FUNDAÇÃO — o DDL aqui é de referência histórica
+>
+> Os marcos 1 a 4 foram entregues. O DDL deste documento **não** reflete o schema atual: as
+> migrations `007`–`011` acrescentaram tipo do conceito, universo, país, idioma, embeddings e
+> sentimento, e trocaram três índices de unicidade. A verdade do schema são os arquivos em
+> `api/migrations/`; a explicação de cada camada está nas specs listadas em
+> [`README.md`](README.md).
+
 ---
 
 ## Visão geral dos marcos

@@ -1,4 +1,9 @@
 requests>=2.31
 pypdf>=4.0
 anthropic>=0.40
+# Sentimento (docs/sentimento.md): medido em INGLÊS, no bot.
+#   vaderSentiment = polaridade (o padrão para inglês; também embarcado no NLTK)
+#   textblob       = subjetividade (fato x juízo); .sentiment NÃO precisa de corpora do NLTK
+vaderSentiment>=3.3
+textblob>=0.18
 # Ollama é opcional (backend local): falamos com ele via HTTP, sem SDK.

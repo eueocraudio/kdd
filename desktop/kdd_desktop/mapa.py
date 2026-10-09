@@ -162,16 +162,22 @@ class ConceitoNode(QGraphicsItem):
 
 
 class ProposicaoEdge(QGraphicsItem):
-    """Seta rotulada origem →[relação]→ destino; espessura conforme a certeza."""
+    """Seta rotulada origem →[relação]→ destino.
+
+    Espessura/cor saem do VALOR 0–100 da proposição (docs/valor-conhecimento.md §3) —
+    o sinal que combina estrutura da tripla, reforço por fontes e esteio dos conceitos.
+    Sem valor (API antiga), cai para a certeza como antes.
+    """
 
     def __init__(self, prop_id: int, origem: ConceitoNode, destino: ConceitoNode,
-                 relacao: str, certeza: int = 0) -> None:
+                 relacao: str, certeza: int = 0, valor: int | None = None) -> None:
         super().__init__()
         self.prop_id = prop_id
         self.origem = origem
         self.destino = destino
         self.relacao = relacao
         self.certeza = certeza
+        self.valor = valor
         self._p1 = QPointF()
         self._p2 = QPointF()
         self.setZValue(1)
@@ -191,8 +197,14 @@ class ProposicaoEdge(QGraphicsItem):
 
     def paint(self, painter: QPainter, option, widget=None) -> None:  # noqa: ANN001
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        largura = 1.5 + min(self.certeza, 6) * 0.9
-        cor = QColor("#16a34a") if self.certeza > 0 else QColor("#9ca3af")
+        if self.valor is not None:
+            largura = 1.0 + (max(0, min(100, self.valor)) / 100) * 5.0
+            cor = (QColor("#15803d") if self.valor >= 70
+                   else QColor("#ca8a04") if self.valor >= 45
+                   else QColor("#9ca3af"))
+        else:
+            largura = 1.5 + min(self.certeza, 6) * 0.9
+            cor = QColor("#16a34a") if self.certeza > 0 else QColor("#9ca3af")
         painter.setPen(QPen(cor, largura))
         painter.drawLine(self._p1, self._p2)
         # cabeça da seta
@@ -507,13 +519,15 @@ class MapaDialog(QDialog):
             conceitos.append({"id": o["id"], "rotulo": o.get("rotulo") or "", "sentido": "", "areas": ""})
             props.append({"id": p["proposicao_id"], "relacao": p["relacao"],
                           "origem": {"id": self._foco}, "destino": {"id": o["id"]},
-                          "fontes_aprovadas": p.get("fontes_aprovadas", 0)})
+                          "fontes_aprovadas": p.get("fontes_aprovadas", 0),
+                          "valor": p.get("valor")})
         for p in c.get("proposicoes_destino", []):
             o = p["origem"]
             conceitos.append({"id": o["id"], "rotulo": o.get("rotulo") or "", "sentido": "", "areas": ""})
             props.append({"id": p["proposicao_id"], "relacao": p["relacao"],
                           "origem": {"id": o["id"]}, "destino": {"id": self._foco},
-                          "fontes_aprovadas": p.get("fontes_aprovadas", 0)})
+                          "fontes_aprovadas": p.get("fontes_aprovadas", 0),
+                          "valor": p.get("valor")})
         return conceitos, props, self._foco, f"Conceito: {rot}"
 
     def _recarregar(self) -> None:
@@ -544,9 +558,11 @@ class MapaDialog(QDialog):
         for p in props:
             oid, did = int(p["origem"]["id"]), int(p["destino"]["id"])
             if oid in self._nodes and did in self._nodes:
+                valor = p.get("valor")
                 cena.addItem(ProposicaoEdge(int(p.get("id") or 0), self._nodes[oid],
                                             self._nodes[did], p.get("relacao") or "",
-                                            int(p.get("fontes_aprovadas") or 0)))
+                                            int(p.get("fontes_aprovadas") or 0),
+                                            None if valor is None else int(valor)))
                 edges_ids.append((oid, did))
 
         self._posicionar(edges_ids, foco_id)
@@ -800,6 +816,10 @@ class MapasTab(QWidget):
         split.addWidget(dir_)
         split.setSizes([320, 540])
 
+        self._carregar()
+
+    def recarregar(self) -> None:
+        """Recarga pública — usada pela troca de universo na janela principal."""
         self._carregar()
 
     def _carregar(self) -> None:

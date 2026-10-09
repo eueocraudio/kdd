@@ -5,6 +5,7 @@ import html
 from typing import Any
 
 from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -97,6 +98,7 @@ class MainWindow(QMainWindow):
         from .mapa import MapasTab
         self.tabs.addTab(MapasTab(self._client), "Mapas")
         self.tabs.addTab(FilaTab(self._client), "Fila")
+        self.tabs.addTab(EsteiosTab(self._client), "Esteios")
         self.setCentralWidget(self.tabs)
 
         barra = self.addToolBar("Principal")
@@ -111,6 +113,18 @@ class MainWindow(QMainWindow):
         b_pdf = QPushButton("⬆ Enviar documento")
         b_pdf.clicked.connect(self._enviar_pdf)
         barra.addWidget(b_pdf)
+
+        # UNIVERSO: o filtro mais EXTERNO (docs/universos.md). Trocar aqui redireciona
+        # toda a leitura do cliente — áreas, conceitos, proposições, fila, esteios.
+        barra.addSeparator()
+        barra.addWidget(QLabel(" Universo: "))
+        self.cb_universo = QComboBox()
+        self.cb_universo.setMinimumWidth(170)
+        self.cb_universo.setToolTip(
+            "Domínio de conhecimento isolado. O mesmo rótulo e o mesmo sentido podem "
+            "existir em vários universos, como conceitos diferentes.")
+        self.cb_universo.currentIndexChanged.connect(self._mudar_universo)
+        barra.addWidget(self.cb_universo)
 
         # Contexto (lente por fonte): filtra a base ao que veio de uma fonte.
         barra.addSeparator()
@@ -145,10 +159,56 @@ class MainWindow(QMainWindow):
     def _recarregar(self) -> None:
         try:
             self._client.saude()
+            self._carregar_universos()
             self._carregar_areas()
             self._carregar_contexto()
             self._listar_conceitos(areas=self._areas_marcadas() or None)
-            self.statusBar().showMessage(f"Conectado a {self._client._cfg.base_url}")
+            universo = self._client.universo or "principal"
+            self.statusBar().showMessage(
+                f"Conectado a {self._client._cfg.base_url} — universo: {universo}")
+        except KddApiError as e:
+            self._erro(str(e))
+
+    def _carregar_universos(self) -> None:
+        """Preenche o seletor de universos, preservando o que está selecionado."""
+        atual = self._client.universo
+        self.cb_universo.blockSignals(True)
+        self.cb_universo.clear()
+        try:
+            universos = self._client.universos()
+        except KddApiError:
+            # API antiga, sem universos: esconde o seletor e segue (um universo só).
+            self.cb_universo.blockSignals(False)
+            self.cb_universo.setVisible(False)
+            return
+        for u in universos:
+            etiqueta = f"{u['nome']} ({u['conceitos']})"
+            self.cb_universo.addItem(etiqueta, u["slug"])
+        self.cb_universo.setVisible(len(universos) > 1)
+        idx = self.cb_universo.findData(atual) if atual else 0
+        self.cb_universo.setCurrentIndex(max(0, idx))
+        self._client.universo = self.cb_universo.currentData() or ""
+        self.cb_universo.blockSignals(False)
+
+    def _mudar_universo(self) -> None:
+        """Troca o universo ativo e recarrega TUDO (nada do anterior pode sobrar)."""
+        slug = self.cb_universo.currentData()
+        if slug is None or slug == self._client.universo:
+            return
+        self._client.universo = slug
+        # o contexto por fonte é do universo antigo: zera antes de recarregar
+        self._contexto_fonte = None
+        try:
+            self._carregar_areas()
+            self._carregar_contexto()
+            self._listar_conceitos()
+            self.detalhe.clear()
+            # as outras abas se recarregam com o cliente já redirecionado
+            for i in range(self.tabs.count()):
+                aba = self.tabs.widget(i)
+                if hasattr(aba, "recarregar"):
+                    aba.recarregar()
+            self.statusBar().showMessage(f"Universo: {slug}")
         except KddApiError as e:
             self._erro(str(e))
 
@@ -360,10 +420,36 @@ def _e(txt: Any) -> str:
     return html.escape(str(txt if txt is not None else ""))
 
 
+def _cor_valor(valor: Any) -> str:
+    """Cor do valor 0–100 da proposição (docs/valor-conhecimento.md §3): verde alto, cinza baixo."""
+    try:
+        v = int(valor)
+    except (TypeError, ValueError):
+        return "#9ca3af"
+    if v >= 70:
+        return "#15803d"
+    if v >= 45:
+        return "#ca8a04"
+    return "#9ca3af"
+
+
 def _html_conceito(c: dict[str, Any]) -> str:
     if not c:
         return "<i>Conceito não encontrado.</i>"
     linhas = [f"<h2>{_e(c.get('sentido'))}</h2>", f"<p><small>conceito #{_e(c.get('id'))}</small></p>"]
+
+    # Tipo e esteio (docs/valor-conhecimento.md): o quanto este conceito sustenta o mapa.
+    grau = c.get("grau") or {}
+    if c.get("tipo") or c.get("esteio") is not None:
+        partes = []
+        if c.get("tipo"):
+            partes.append(f"<b>tipo:</b> {_e(c.get('tipo'))}")
+        if c.get("esteio") is not None:
+            partes.append(f"<b>esteio:</b> {_e(c.get('esteio'))}%")
+        if grau:
+            total = int(grau.get("saida") or 0) + int(grau.get("entrada") or 0)
+            partes.append(f"<b>relações:</b> {total}")
+        linhas.append("<p style='color:#555'>" + " · ".join(partes) + "</p>")
 
     rotulos = c.get("rotulos", [])
     if rotulos:
@@ -381,6 +467,18 @@ def _html_conceito(c: dict[str, Any]) -> str:
         linhas.append("<p><b>Fontes:</b></p><ul>")
         for f in fontes:
             linhas.append(f"<li>{_e(f.get('titulo'))} — <i>{_e(f.get('status_aprovacao'))}</i></li>")
+        linhas.append("</ul>")
+
+    # Semelhantes (camada vetorial): quase-duplicatas candidatas a merge
+    similares = c.get("similares") or []
+    if similares:
+        linhas.append("<p><b>Conceitos semelhantes</b> <span style='color:#888'>(candidatos a merge)</span>:</p><ul>")
+        for s in similares:
+            pct = int(round(100 * float(s.get("similaridade") or 0)))
+            linhas.append(
+                f"<li>{_e(s.get('rotulo'))} — {_e(s.get('sentido'))} "
+                f"<span style='color:#888'>({pct}% parecido)</span></li>"
+            )
         linhas.append("</ul>")
 
     # Conceitos mais intimamente ligados (vizinhos diretos, por força do vínculo)
@@ -402,6 +500,7 @@ def _html_conceito(c: dict[str, Any]) -> str:
             outro = p.get(chave, {})
             linhas.append(
                 f"<li>{_e(p.get('relacao'))} → {_e(outro.get('rotulo'))} "
+                f"<b style='color:{_cor_valor(p.get('valor'))}'>{_e(p.get('valor'))}%</b> "
                 f"<span style='color:#888'>(certeza: {_e(p.get('fontes_aprovadas'))} fonte(s))</span></li>"
             )
         linhas.append("</ul>")
@@ -525,6 +624,19 @@ class ConceitoEditorDialog(QDialog):
         ls.addWidget(b_sentido)
         layout.addWidget(gs)
 
+        # Tipo: entra no cálculo do VALOR das proposições (docs/valor-conhecimento.md §3).
+        gt = QGroupBox("Tipo (peso no valor das proposições)")
+        lt = QHBoxLayout(gt)
+        self.tipo = QComboBox()
+        self.tipo.addItem("(desconhecido)", None)
+        for t in ("entidade", "classe", "processo", "atributo", "outro"):
+            self.tipo.addItem(t, t)
+        b_tipo = QPushButton("Salvar tipo")
+        b_tipo.clicked.connect(self._salvar_tipo)
+        lt.addWidget(self.tipo, 1)
+        lt.addWidget(b_tipo)
+        layout.addWidget(gt)
+
         # Rótulos
         gr = QGroupBox("Rótulos")
         lr = QVBoxLayout(gr)
@@ -551,8 +663,8 @@ class ConceitoEditorDialog(QDialog):
         # Proposições (origem)
         gp = QGroupBox("Proposições (este conceito como origem)")
         lp = QVBoxLayout(gp)
-        self.props = QTableWidget(0, 3)
-        self.props.setHorizontalHeaderLabels(["Relação", "Destino", "Certeza"])
+        self.props = QTableWidget(0, 4)
+        self.props.setHorizontalHeaderLabels(["Relação", "Destino", "Certeza", "Valor"])
         self.props.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.props.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.props.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
@@ -581,6 +693,8 @@ class ConceitoEditorDialog(QDialog):
         except KddApiError as e:
             QMessageBox.warning(self, "Erro", str(e)); return
         self.sentido.setText(c.get("sentido") or "")
+        idx = self.tipo.findData(c.get("tipo"))
+        self.tipo.setCurrentIndex(idx if idx >= 0 else 0)
         self.rotulos.clear()
         for r in c.get("rotulos", []):
             txt = f"{r['texto']}  ★" if r.get("principal") else r["texto"]
@@ -599,6 +713,9 @@ class ConceitoEditorDialog(QDialog):
             it_d.setData(Qt.ItemDataRole.UserRole, (int(p["proposicao_id"]), int(dest.get("id") or 0)))
             self.props.setItem(linha, 1, it_d)
             self.props.setItem(linha, 2, QTableWidgetItem(str(p.get("fontes_aprovadas", 0))))
+            it_v = QTableWidgetItem(f"{p.get('valor', 0)}%")
+            it_v.setForeground(QColor(_cor_valor(p.get("valor"))))
+            self.props.setItem(linha, 3, it_v)
 
     def _executar(self, fn) -> None:
         try:
@@ -611,6 +728,10 @@ class ConceitoEditorDialog(QDialog):
         novo = self.sentido.text().strip()
         if novo:
             self._executar(lambda: self._client.editar_conceito(self._cid, novo))
+
+    def _salvar_tipo(self) -> None:
+        tipo = self.tipo.currentData()
+        self._executar(lambda: self._client.editar_conceito_tipo(self._cid, tipo))
 
     # rótulos
     def _add_rotulo(self) -> None:
@@ -689,6 +810,85 @@ class ConceitoEditorDialog(QDialog):
         self._executar(lambda: self._client.split_conceito(self._cid, sentido.strip(), rot_ids, prop_ids))
 
 
+class EsteiosTab(QWidget):
+    """Os conceitos-ESTEIO do armazém: os que sustentam mais relações.
+
+    Decisão V do idealizador: "no mapa conceitual um esteio bom é fonte de inúmeras
+    relações com outros conceitos". É a leitura macro de onde o conhecimento se concentra
+    — e, junto com a lista de semelhantes, a fila de trabalho da curadoria.
+    """
+
+    def __init__(self, client: KddClient, pai: QWidget | None = None) -> None:
+        super().__init__(pai)
+        self._client = client
+        layout = QVBoxLayout(self)
+
+        topo = QHBoxLayout()
+        topo.addWidget(QLabel("Conceitos que mais sustentam o mapa (maior nº de relações):"))
+        topo.addStretch(1)
+        b_at = QPushButton("Atualizar")
+        b_at.clicked.connect(self.recarregar)
+        topo.addWidget(b_at)
+        layout.addLayout(topo)
+
+        self.tabela = QTableWidget(0, 6)
+        self.tabela.setHorizontalHeaderLabels(
+            ["ID", "Rótulo", "Tipo", "Relações", "Esteio", "Sentido"])
+        self.tabela.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
+        self.tabela.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.tabela.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        layout.addWidget(self.tabela, 1)
+
+        self.semelhantes = QTableWidget(0, 3)
+        self.semelhantes.setHorizontalHeaderLabels(["Parecido", "Conceito A", "Conceito B"])
+        self.semelhantes.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.semelhantes.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        self.semelhantes.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.lbl_sem = QLabel("Conceitos semelhantes (candidatos a merge) — exige vetorização:")
+        layout.addWidget(self.lbl_sem)
+        layout.addWidget(self.semelhantes, 1)
+
+        self.recarregar()
+
+    def recarregar(self) -> None:
+        try:
+            esteios = self._client.esteios(limite=50)
+        except KddApiError as e:
+            QMessageBox.warning(self, "Erro", str(e))
+            return
+        self.tabela.setRowCount(0)
+        for c in esteios:
+            linha = self.tabela.rowCount()
+            self.tabela.insertRow(linha)
+            grau = c.get("grau") or {}
+            total = int(grau.get("saida") or 0) + int(grau.get("entrada") or 0)
+            for col, txt in enumerate([
+                str(c.get("id") or ""), c.get("rotulo") or "", c.get("tipo") or "—",
+                str(total), f"{c.get('esteio', 0)}%", c.get("sentido") or "",
+            ]):
+                self.tabela.setItem(linha, col, QTableWidgetItem(txt))
+
+        # Semelhantes: a tabela fica vazia enquanto ninguém rodar `main.py --vetorizar`.
+        try:
+            pares = self._client.similares(limite=50)
+        except KddApiError:
+            pares = []
+        self.semelhantes.setRowCount(0)
+        for par in pares:
+            linha = self.semelhantes.rowCount()
+            self.semelhantes.insertRow(linha)
+            pct = int(round(100 * float(par.get("similaridade") or 0)))
+            a, b = par.get("a") or {}, par.get("b") or {}
+            self.semelhantes.setItem(linha, 0, QTableWidgetItem(f"{pct}%"))
+            self.semelhantes.setItem(linha, 1, QTableWidgetItem(f"#{a.get('id')} {a.get('rotulo') or ''} — {a.get('sentido') or ''}"))
+            self.semelhantes.setItem(linha, 2, QTableWidgetItem(f"#{b.get('id')} {b.get('rotulo') or ''} — {b.get('sentido') or ''}"))
+        if not pares:
+            self.lbl_sem.setText(
+                "Conceitos semelhantes: nenhum par calculado ainda "
+                "(rode `main.py --vetorizar` no bot)."
+            )
+
+
 class FilaTab(QWidget):
     """Feedback da fila de processamento de documentos (PDF/TXT)."""
 
@@ -740,6 +940,10 @@ class FilaTab(QWidget):
         self._timer.setInterval(5000)
         self._timer.timeout.connect(self._tick)
         self._timer.start()
+        self._carregar()
+
+    def recarregar(self) -> None:
+        """Recarga pública — usada pela troca de universo na janela principal."""
         self._carregar()
 
     def _tick(self) -> None:

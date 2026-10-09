@@ -40,6 +40,8 @@ class Config:
     chars_por_secao: int     # >0 ativa extração por seções (0 = passada única)
     max_chars_total: int     # cap de segurança do texto total no modo seções
     max_secoes: int          # >0 limita o nº de seções processadas (0 = todas)
+    embed_model: str         # modelo de embedding (camada vetorial — --vetorizar)
+    similar_min: float       # cosseno mínimo p/ gravar um par como semelhante
 
     @staticmethod
     def carregar() -> "Config":
@@ -61,6 +63,15 @@ class Config:
             except ValueError as e:
                 raise RuntimeError(
                     f"Configuração inválida: {chave}={bruto!r} não é um inteiro."
+                ) from e
+
+        def pega_float(chave: str, padrao: str) -> float:
+            bruto = pega(chave, padrao=padrao)
+            try:
+                return float(bruto)
+            except ValueError as e:
+                raise RuntimeError(
+                    f"Configuração inválida: {chave}={bruto!r} não é um número."
                 ) from e
 
         base_url = pega("KDD_APP_URL").rstrip("/")
@@ -85,4 +96,6 @@ class Config:
             chars_por_secao=pega_int("KDD_CHARS_POR_SECAO", "0"),
             max_chars_total=pega_int("KDD_MAX_CHARS_TOTAL", "400000"),
             max_secoes=pega_int("KDD_MAX_SECOES", "0"),
+            embed_model=pega("KDD_EMBED_MODEL", padrao="nomic-embed-text"),
+            similar_min=pega_float("KDD_SIMILAR_MIN", "0.85"),
         )

@@ -13,9 +13,14 @@ require APP_ROOT . '/src/env.php';
 require APP_ROOT . '/src/http.php';
 require APP_ROOT . '/src/db.php';
 require APP_ROOT . '/src/auth.php';
+require APP_ROOT . '/src/idioma.php';
+require APP_ROOT . '/src/valor.php';
+require APP_ROOT . '/src/sentimento.php';
+require APP_ROOT . '/src/universo.php';
 require APP_ROOT . '/src/handlers/fontes.php';
 require APP_ROOT . '/src/handlers/consulta.php';
 require APP_ROOT . '/src/handlers/editor.php';
+require APP_ROOT . '/src/handlers/vetor.php';
 
 kdd_load_env(APP_ROOT . '/.env');
 
@@ -96,6 +101,35 @@ if ($method === 'GET' && $path === '/proposicoes') {
 
 if ($method === 'GET' && $path === '/constelacao') {
     constelacao();
+}
+
+// Universos paralelos (docs/universos.md).
+if ($path === '/universos') {
+    if ($method === 'GET')  { universos_listar(); }
+    if ($method === 'POST') { universo_criar($auth); }
+}
+
+if (preg_match('#^/conceitos/(\d+)/contrapartes$#', $path, $m) && $method === 'GET') {
+    conceito_contrapartes((int) $m[1]);
+}
+
+// Esteios: conceitos-pilar por grau (docs/valor-conhecimento.md §5).
+if ($method === 'GET' && $path === '/esteios') {
+    esteios_listar();
+}
+
+// Camada vetorial (docs/valor-conhecimento.md §6): embeddings e semelhantes.
+if ($method === 'GET' && $path === '/embeddings') {
+    embeddings_listar();
+}
+
+if (preg_match('#^/conceitos/(\d+)/embedding$#', $path, $m) && $method === 'PUT') {
+    embedding_gravar((int) $m[1]);
+}
+
+if ($path === '/similares') {
+    if ($method === 'GET') { similares_listar(); }
+    if ($method === 'PUT') { similares_gravar(); }
 }
 
 // Catálogo de termos/paths conhecidos por trilha (Passo 1 — docs/catalogo-trilhas.md).

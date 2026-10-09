@@ -72,3 +72,28 @@ class KddClient:
         corpo = {"conceitos": conceitos, "proposicoes": proposicoes}
         r = self._s.post(self._url(f"/fontes/{fonte_id}/mapas"), json=corpo, timeout=self._timeout)
         return self._ok(r)
+
+    # ── camada vetorial (docs/valor-conhecimento.md §6) ──
+
+    def conceitos_sem_embedding(self, modelo: str) -> list[dict[str, Any]]:
+        """GET /embeddings?faltando=1 — conceitos ainda sem vetor neste modelo."""
+        r = self._s.get(self._url("/embeddings"), params={"modelo": modelo, "faltando": 1},
+                        timeout=self._timeout)
+        return self._ok(r).get("conceitos", [])
+
+    def listar_embeddings(self, modelo: str) -> list[dict[str, Any]]:
+        """GET /embeddings — todos os vetores do modelo (para o cosseno par a par)."""
+        r = self._s.get(self._url("/embeddings"), params={"modelo": modelo},
+                        timeout=(self._timeout[0], max(self._timeout[1], 180.0)))
+        return self._ok(r).get("embeddings", [])
+
+    def gravar_embedding(self, conceito_id: int, modelo: str, vetor: list[float]) -> dict[str, Any]:
+        r = self._s.put(self._url(f"/conceitos/{conceito_id}/embedding"),
+                        json={"modelo": modelo, "vetor": vetor}, timeout=self._timeout)
+        return self._ok(r)
+
+    def gravar_similares(self, modelo: str, pares: list[dict[str, Any]]) -> dict[str, Any]:
+        """PUT /similares — SUBSTITUI os pares do modelo (recálculo integral)."""
+        r = self._s.put(self._url("/similares"), json={"modelo": modelo, "pares": pares},
+                        timeout=(self._timeout[0], max(self._timeout[1], 180.0)))
+        return self._ok(r)

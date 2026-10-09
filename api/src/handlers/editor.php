@@ -24,21 +24,26 @@ function kdd_exigir_validador(array $auth): void
 }
 
 /** Get-or-create da fonte de curadoria do autor (origem=curadoria, já aprovada). */
-function kdd_fonte_curadoria(PDO $pdo, string $autor): int
+function kdd_fonte_curadoria(PDO $pdo, string $autor, int $universoId = 1): int
 {
     $autor  = trim($autor) !== '' ? trim($autor) : 'curador';
     $titulo = 'Curadoria — ' . $autor;
 
-    $s = $pdo->prepare("SELECT id FROM fonte WHERE origem = 'curadoria' AND titulo = ? LIMIT 1");
-    $s->execute([$titulo]);
+    // ⚠️ UMA fonte de curadoria POR UNIVERSO. Se fosse uma só, a curadoria feita no
+    // universo B apoiaria proposições do universo B numa fonte do universo A — a certeza
+    // atravessaria a fronteira que é o ponto dos universos paralelos.
+    $s = $pdo->prepare(
+        "SELECT id FROM fonte WHERE origem = 'curadoria' AND titulo = ? AND universo_id = ? LIMIT 1"
+    );
+    $s->execute([$titulo, $universoId]);
     $row = $s->fetch();
     if ($row) {
         return (int) $row['id'];
     }
     $pdo->prepare(
-        "INSERT INTO fonte (titulo, arquivo_caminho, origem, status_proc, status_aprovacao)
-         VALUES (?, NULL, 'curadoria', 'processado', 'aprovada')"
-    )->execute([$titulo]);
+        "INSERT INTO fonte (titulo, arquivo_caminho, origem, universo_id, status_proc, status_aprovacao)
+         VALUES (?, NULL, 'curadoria', ?, 'processado', 'aprovada')"
+    )->execute([$titulo, $universoId]);
     return (int) $pdo->lastInsertId();
 }
 
@@ -69,20 +74,26 @@ function kdd_certeza(PDO $pdo, int $propId): int
 /** Snapshot leve de um conceito (p/ changeset/resposta). */
 function kdd_conceito_resumo(PDO $pdo, int $id): ?array
 {
-    $s = $pdo->prepare("SELECT id, sentido, desabilitado FROM conceito WHERE id = ?");
+    $s = $pdo->prepare(
+        "SELECT id, sentido, tipo, desabilitado, universo_id, pais FROM conceito WHERE id = ?"
+    );
     $s->execute([$id]);
     $c = $s->fetch();
     if (!$c) {
         return null;
     }
-    $r = $pdo->prepare("SELECT id, texto, principal FROM rotulo WHERE conceito_id = ? ORDER BY principal DESC, id");
+    $r = $pdo->prepare(
+        "SELECT id, texto, idioma, principal FROM rotulo WHERE conceito_id = ?
+          ORDER BY principal DESC, idioma, id"
+    );
     $r->execute([$id]);
     $a = $pdo->prepare(
         "SELECT a.id, a.nome FROM conceito_area ca JOIN area a ON a.id = ca.area_id WHERE ca.conceito_id = ? ORDER BY a.nome"
     );
     $a->execute([$id]);
-    return ['id' => (int) $c['id'], 'sentido' => $c['sentido'],
-            'desabilitado' => (int) $c['desabilitado'],
+    return ['id' => (int) $c['id'], 'sentido' => $c['sentido'], 'tipo' => $c['tipo'],
+            'desabilitado' => (int) $c['desabilitado'], 'pais' => $c['pais'],
+            'universo' => kdd_universo_resumo($pdo, (int) $c['universo_id']),
             'rotulos' => $r->fetchAll(), 'areas' => $a->fetchAll()];
 }
 
@@ -108,6 +119,12 @@ function proposicao_criar(array $auth): void
     $origem  = (int) ($body['origem_id']  ?? 0);
     $destino = (int) ($body['destino_id'] ?? 0);
     $relacao = trim((string) ($body['relacao'] ?? ''));
+    $pais    = kdd_pais_valido($body['pais'] ?? '');   // '' = vale em qualquer país
+    // Curadoria pode informar o enquadramento (ou corrigir o que a IA leu) e a forma
+    // inglesa da relação, que é o substrato da análise (docs/sentimento.md).
+    $rel_en  = trim((string) ($body['relacao_en'] ?? ''));
+    $polar   = kdd_polaridade_valida($body['polaridade'] ?? null);
+    $subj    = kdd_subjetividade_valida($body['subjetividade'] ?? null);
 
     if ($origem <= 0 || $destino <= 0 || $relacao === '') {
         json_error('Informe origem_id, relacao e destino_id', 400);
@@ -115,19 +132,44 @@ function proposicao_criar(array $auth): void
     kdd_assert_conceito($pdo, $origem);
     kdd_assert_conceito($pdo, $destino);
 
+    // ⚠️ Proposição NUNCA cruza universo (docs/universos.md §3). É o que mantém cada
+    // universo com sua própria verdade: certeza, valor e esteio só com o que existe ali.
+    // Ligação entre universos não é proposição, é CONTRAPARTE (GET /conceitos/{id}/contrapartes).
+    $uOrigem  = kdd_universo_do_conceito($pdo, $origem);
+    $uDestino = kdd_universo_do_conceito($pdo, $destino);
+    if ($uOrigem !== $uDestino) {
+        json_error(
+            'Proposição não pode cruzar universos: a origem está em ' .
+            kdd_universo_resumo($pdo, $uOrigem)['slug'] . ' e o destino em ' .
+            kdd_universo_resumo($pdo, $uDestino)['slug'] .
+            '. Use as contrapartes para relacionar conceitos de universos diferentes.',
+            409
+        );
+    }
+
     $pdo->beginTransaction();
     try {
-        $prop_id  = kdd_upsert_proposicao($pdo, $origem, $relacao, $destino);
-        $fonte_id = kdd_fonte_curadoria($pdo, (string) ($auth['descricao'] ?? ''));
+        $prop_id  = kdd_upsert_proposicao($pdo, $origem, $relacao, $destino, $pais);
+        $fonte_id = kdd_fonte_curadoria($pdo, (string) ($auth['descricao'] ?? ''), $uOrigem);
 
-        $pdo->prepare("INSERT IGNORE INTO referencia (proposicao_id, fonte_id) VALUES (?, ?)")
-            ->execute([$prop_id, $fonte_id]);
+        if ($rel_en !== '') {
+            $pdo->prepare("UPDATE proposicao SET relacao_en = ? WHERE id = ?")
+                ->execute([$rel_en, $prop_id]);
+        }
+        $pdo->prepare(
+            "INSERT INTO referencia (proposicao_id, fonte_id, polaridade, subjetividade)
+             VALUES (?, ?, ?, ?)
+             ON DUPLICATE KEY UPDATE polaridade = VALUES(polaridade),
+                                     subjetividade = VALUES(subjetividade)"
+        )->execute([$prop_id, $fonte_id, $polar, $subj]);
         foreach ([$origem, $destino] as $cid) {
             $pdo->prepare("INSERT IGNORE INTO conceito_fonte (conceito_id, fonte_id) VALUES (?, ?)")
                 ->execute([$cid, $fonte_id]);
         }
         kdd_log_changeset($pdo, $auth, 'criar_proposicao', 'proposicao', $prop_id, null,
-            ['origem_id' => $origem, 'relacao' => $relacao, 'destino_id' => $destino]);
+            ['origem_id' => $origem, 'relacao' => $relacao, 'destino_id' => $destino,
+             'pais' => $pais, 'relacao_en' => $rel_en,
+             'polaridade' => $polar, 'subjetividade' => $subj]);
         $pdo->commit();
     } catch (Throwable $e) {
         $pdo->rollBack();
@@ -160,10 +202,17 @@ function proposicao_editar(array $auth, int $id): void
     kdd_assert_conceito($pdo, $origem);
     kdd_assert_conceito($pdo, $destino);
 
+    // Proposição nunca cruza universo (igual ao criar).
+    $uOrigem  = kdd_universo_do_conceito($pdo, $origem);
+    $uDestino = kdd_universo_do_conceito($pdo, $destino);
+    if ($uOrigem !== $uDestino) {
+        json_error('Proposição não pode cruzar universos', 409);
+    }
+
     $pdo->beginTransaction();
     try {
         $novo_id  = kdd_upsert_proposicao($pdo, $origem, $relacao, $destino);
-        $fonte_id = kdd_fonte_curadoria($pdo, (string) ($auth['descricao'] ?? ''));
+        $fonte_id = kdd_fonte_curadoria($pdo, (string) ($auth['descricao'] ?? ''), $uOrigem);
 
         if ($novo_id !== (int) $old['id']) {
             // move a referência de curadoria da antiga para a nova
@@ -196,7 +245,9 @@ function proposicao_remover(array $auth, int $id): void
     kdd_exigir_validador($auth);
     $pdo = kdd_db();
 
-    $s = $pdo->prepare("SELECT id, conceito_origem, relacao, conceito_destino FROM proposicao WHERE id = ?");
+    $s = $pdo->prepare(
+        "SELECT id, conceito_origem, relacao, conceito_destino, pais FROM proposicao WHERE id = ?"
+    );
     $s->execute([$id]);
     $old = $s->fetch();
     if (!$old) {
@@ -205,7 +256,10 @@ function proposicao_remover(array $auth, int $id): void
 
     $pdo->beginTransaction();
     try {
-        $fonte_id = kdd_fonte_curadoria($pdo, (string) ($auth['descricao'] ?? ''));
+        $fonte_id = kdd_fonte_curadoria(
+            $pdo, (string) ($auth['descricao'] ?? ''),
+            kdd_universo_do_conceito($pdo, (int) $old['conceito_origem'])
+        );
         $pdo->prepare("DELETE FROM referencia WHERE proposicao_id = ? AND fonte_id = ?")
             ->execute([$id, $fonte_id]);
         $removida = kdd_remover_proposicao_se_orfa($pdo, $id);
@@ -222,20 +276,26 @@ function proposicao_remover(array $auth, int $id): void
               'certeza' => $removida ? 0 : kdd_certeza($pdo, $id)]);
 }
 
-/** Upsert idempotente de uma proposição (origem+relacao+destino). Retorna o id. */
-function kdd_upsert_proposicao(PDO $pdo, int $origem, string $relacao, int $destino): int
+/** Upsert idempotente de uma proposição (origem+relacao+destino+pais). Retorna o id.
+ * O PAÍS entra na tripla (migration 009): a mesma relação pode valer num país e não noutro,
+ * com certezas independentes. '' = universal. */
+function kdd_upsert_proposicao(PDO $pdo, int $origem, string $relacao, int $destino,
+                               string $pais = ''): int
 {
+    $pais = kdd_pais_valido($pais);
     $s = $pdo->prepare(
-        "SELECT id FROM proposicao WHERE conceito_origem = ? AND relacao = ? AND conceito_destino = ? LIMIT 1"
+        "SELECT id FROM proposicao WHERE conceito_origem = ? AND relacao = ? AND conceito_destino = ?
+            AND pais = ? LIMIT 1"
     );
-    $s->execute([$origem, $relacao, $destino]);
+    $s->execute([$origem, $relacao, $destino, $pais]);
     $row = $s->fetch();
     if ($row) {
         return (int) $row['id'];
     }
     $pdo->prepare(
-        "INSERT INTO proposicao (conceito_origem, relacao, conceito_destino) VALUES (?, ?, ?)"
-    )->execute([$origem, $relacao, $destino]);
+        "INSERT INTO proposicao (conceito_origem, relacao, conceito_destino, pais)
+         VALUES (?, ?, ?, ?)"
+    )->execute([$origem, $relacao, $destino, $pais]);
     return (int) $pdo->lastInsertId();
 }
 
@@ -252,14 +312,14 @@ function kdd_remover_proposicao_se_orfa(PDO $pdo, int $propId): bool
 }
 
 /** View de uma proposição com rótulos das pontas e certeza. */
-function kdd_proposicao_view(PDO $pdo, int $id): ?array
+function kdd_proposicao_view(PDO $pdo, int $id, string $idioma = ''): ?array
 {
     $s = $pdo->prepare(
-        "SELECT p.id, p.relacao,
+        "SELECT p.id, p.relacao, p.pais,
                 p.conceito_origem  AS origem_id,
                 p.conceito_destino AS destino_id,
-                (SELECT texto FROM rotulo WHERE conceito_id = p.conceito_origem  ORDER BY principal DESC, id LIMIT 1) AS origem_rotulo,
-                (SELECT texto FROM rotulo WHERE conceito_id = p.conceito_destino ORDER BY principal DESC, id LIMIT 1) AS destino_rotulo
+                " . kdd_sql_rotulo('p.conceito_origem', $idioma) . " AS origem_rotulo,
+                " . kdd_sql_rotulo('p.conceito_destino', $idioma) . " AS destino_rotulo
            FROM proposicao p WHERE p.id = ?"
     );
     $s->execute([$id]);
@@ -273,7 +333,7 @@ function kdd_proposicao_view(PDO $pdo, int $id): ?array
 
 /* ───────────────────────── Conceitos ───────────────────────── */
 
-/** POST /conceitos  { sentido, rotulo_principal, areas?: [nomes] } */
+/** POST /conceitos  { sentido, rotulo_principal, areas?: [nomes], tipo?, universo?, pais?, idioma? } */
 function conceito_criar(array $auth): void
 {
     kdd_exigir_validador($auth);
@@ -283,33 +343,42 @@ function conceito_criar(array $auth): void
     $sentido = trim((string) ($body['sentido'] ?? ''));
     $rotulo  = trim((string) ($body['rotulo_principal'] ?? ''));
     $areas   = is_array($body['areas'] ?? null) ? $body['areas'] : [];
+    $tipo    = kdd_tipo_valido($body['tipo'] ?? null);
+    $uid     = kdd_universo_req($pdo, $body['universo'] ?? null);
+    $pais    = kdd_pais_valido($body['pais'] ?? '');          // '' = universal
+    $idioma  = kdd_idioma_valido($body['idioma'] ?? '') ?: KDD_IDIOMA_PADRAO;
     if ($sentido === '' || $rotulo === '') {
         json_error('Informe sentido e rotulo_principal', 400);
     }
 
-    $s = $pdo->prepare("SELECT id FROM conceito WHERE sentido = ? LIMIT 1");
-    $s->execute([$sentido]);
+    // Unicidade do sentido é por (universo, pais) — migrations 008 e 009.
+    $s = $pdo->prepare(
+        "SELECT id FROM conceito WHERE universo_id = ? AND pais = ? AND sentido = ? LIMIT 1"
+    );
+    $s->execute([$uid, $pais, $sentido]);
     if ($s->fetch()) {
-        json_error('Já existe um conceito com esse sentido', 409);
+        json_error('Já existe um conceito com esse sentido neste universo e país', 409);
     }
 
     $pdo->beginTransaction();
     try {
-        $pdo->prepare("INSERT INTO conceito (sentido) VALUES (?)")->execute([$sentido]);
+        $pdo->prepare("INSERT INTO conceito (sentido, tipo, universo_id, pais) VALUES (?, ?, ?, ?)")
+            ->execute([$sentido, $tipo, $uid, $pais]);
         $cid = (int) $pdo->lastInsertId();
-        kdd_garantir_rotulo($pdo, $cid, $rotulo, true);
+        kdd_garantir_rotulo($pdo, $cid, $rotulo, true, $idioma);
         foreach ($areas as $nome) {
             $nome = trim((string) $nome);
             if ($nome === '') { continue; }
-            $aid = kdd_upsert_area($pdo, $nome);
+            $aid = kdd_upsert_area($pdo, $nome, $uid);
             $pdo->prepare("INSERT IGNORE INTO conceito_area (conceito_id, area_id) VALUES (?, ?)")
                 ->execute([$cid, $aid]);
         }
-        $fonte_id = kdd_fonte_curadoria($pdo, (string) ($auth['descricao'] ?? ''));
+        $fonte_id = kdd_fonte_curadoria($pdo, (string) ($auth['descricao'] ?? ''), $uid);
         $pdo->prepare("INSERT IGNORE INTO conceito_fonte (conceito_id, fonte_id) VALUES (?, ?)")
             ->execute([$cid, $fonte_id]);
         kdd_log_changeset($pdo, $auth, 'criar_conceito', 'conceito', $cid, null,
-            ['sentido' => $sentido, 'rotulo_principal' => $rotulo, 'areas' => $areas]);
+            ['sentido' => $sentido, 'tipo' => $tipo, 'rotulo_principal' => $rotulo,
+             'areas' => $areas, 'universo_id' => $uid, 'pais' => $pais, 'idioma' => $idioma]);
         $pdo->commit();
     } catch (Throwable $e) {
         $pdo->rollBack();
@@ -319,7 +388,8 @@ function conceito_criar(array $auth): void
     json_out(['ok' => true, 'conceito' => kdd_conceito_resumo($pdo, $cid)], 201);
 }
 
-/** PATCH /conceitos/{id}  { sentido } */
+/** PATCH /conceitos/{id}  { sentido?, tipo? } — tipo: entidade|classe|processo|atributo|outro
+ * (entra no cálculo do valor; '' ou null limpa). */
 function conceito_editar(array $auth, int $id): void
 {
     kdd_exigir_validador($auth);
@@ -339,6 +409,11 @@ function conceito_editar(array $auth, int $id): void
             json_error('Outro conceito já usa esse sentido', 409);
         }
         $pdo->prepare("UPDATE conceito SET sentido = ? WHERE id = ?")->execute([$sentido, $id]);
+    }
+    if (array_key_exists('tipo', $body)) {
+        // Curadoria manda no tipo: o bot só preenche quando está NULL (ver fontes_mapas).
+        $pdo->prepare("UPDATE conceito SET tipo = ? WHERE id = ?")
+            ->execute([kdd_tipo_valido($body['tipo']), $id]);
     }
     kdd_log_changeset($pdo, $auth, 'editar_conceito', 'conceito', $id, $antes, kdd_conceito_resumo($pdo, $id));
     json_out(['ok' => true, 'conceito' => kdd_conceito_resumo($pdo, $id)]);
@@ -365,7 +440,9 @@ function conceito_desabilitar(array $auth, int $id): void
     json_out(['ok' => true, 'conceito' => $depois]);
 }
 
-/** POST /conceitos/{id}/rotulos  { texto, principal? } */
+/** POST /conceitos/{id}/rotulos  { texto, idioma?, principal? }
+ * É por aqui que se TRADUZ um conceito: mesmo conceito, rótulo em outro idioma
+ * (docs/idioma-pais.md §3). O idioma entra na unicidade do rótulo. */
 function conceito_add_rotulo(array $auth, int $id): void
 {
     kdd_exigir_validador($auth);
@@ -375,13 +452,14 @@ function conceito_add_rotulo(array $auth, int $id): void
 
     $texto     = trim((string) ($body['texto'] ?? ''));
     $principal = (bool) ($body['principal'] ?? false);
+    $idioma    = kdd_idioma_valido($body['idioma'] ?? '') ?: KDD_IDIOMA_PADRAO;
     if ($texto === '') {
         json_error('Informe o texto do rótulo', 400);
     }
     if ($principal) {
         $pdo->prepare("UPDATE rotulo SET principal = 0 WHERE conceito_id = ?")->execute([$id]);
     }
-    kdd_garantir_rotulo($pdo, $id, $texto, $principal);
+    kdd_garantir_rotulo($pdo, $id, $texto, $principal, $idioma);
     if ($principal) {
         // Se o rótulo JÁ existia, kdd_garantir_rotulo retorna cedo sem marcá-lo
         // principal — o UPDATE acima zerou todos e o conceito ficaria sem principal.
@@ -457,7 +535,8 @@ function conceito_add_area(array $auth, int $id): void
         if ($nome === '') {
             json_error('Informe nome ou area_id', 400);
         }
-        $aid = kdd_upsert_area($pdo, $nome);
+        // Área criada aqui nasce no universo DO CONCEITO.
+        $aid = kdd_upsert_area($pdo, $nome, kdd_universo_do_conceito($pdo, $id));
     }
     $pdo->prepare("INSERT IGNORE INTO conceito_area (conceito_id, area_id) VALUES (?, ?)")->execute([$id, $aid]);
     kdd_log_changeset($pdo, $auth, 'add_area', 'conceito', $id, null, ['area_id' => $aid]);
@@ -492,6 +571,34 @@ function conceito_merge(array $auth, int $id): void
     }
     kdd_assert_conceito($pdo, $id);
     kdd_assert_conceito($pdo, $outro);
+
+    // ⚠️ Fusão entre universos é PROIBIDA (docs/universos.md §5): fundir destruiria o
+    // isolamento que é o ponto da coisa. Dois conceitos "iguais" em universos diferentes
+    // são CONTRAPARTES, não duplicatas.
+    // Merge entre PAÍSES também é proibido: "Imposto de Renda" (BR) e o equivalente
+    // português não são duplicatas, são institutos distintos (docs/idioma-pais.md §2).
+    $pq = $pdo->prepare("SELECT pais FROM conceito WHERE id = ?");
+    $pq->execute([$id]);      $pAlvo  = (string) ($pq->fetchColumn() ?: '');
+    $pq->execute([$outro]);   $pOutro = (string) ($pq->fetchColumn() ?: '');
+    if ($pAlvo !== $pOutro) {
+        json_error(
+            "Não se funde conceito de países diferentes ('" . ($pAlvo ?: 'universal') .
+            "' x '" . ($pOutro ?: 'universal') . "'). São institutos distintos, não duplicatas.",
+            409
+        );
+    }
+
+    $uAlvo  = kdd_universo_do_conceito($pdo, $id);
+    $uOutro = kdd_universo_do_conceito($pdo, $outro);
+    if ($uAlvo !== $uOutro) {
+        json_error(
+            'Não se funde conceito de universos diferentes (' .
+            kdd_universo_resumo($pdo, $uAlvo)['slug'] . ' x ' .
+            kdd_universo_resumo($pdo, $uOutro)['slug'] .
+            '). Eles são contrapartes, não duplicatas.',
+            409
+        );
+    }
 
     $antes = ['alvo' => kdd_conceito_resumo($pdo, $id), 'outro' => kdd_conceito_resumo($pdo, $outro)];
 
@@ -590,10 +697,17 @@ function conceito_split(array $auth, int $id): void
     if ($sentido === '') {
         json_error('Informe sentido_novo', 400);
     }
-    $s = $pdo->prepare("SELECT id FROM conceito WHERE sentido = ? LIMIT 1");
-    $s->execute([$sentido]);
+    // O conceito novo HERDA universo E país do original (um split não atravessa fronteira).
+    $uid = kdd_universo_do_conceito($pdo, $id);
+    $sp  = $pdo->prepare("SELECT pais FROM conceito WHERE id = ?");
+    $sp->execute([$id]);
+    $pais_orig = (string) ($sp->fetchColumn() ?: '');
+    $s = $pdo->prepare(
+        "SELECT id FROM conceito WHERE universo_id = ? AND pais = ? AND sentido = ? LIMIT 1"
+    );
+    $s->execute([$uid, $pais_orig, $sentido]);
     if ($s->fetch()) {
-        json_error('Já existe um conceito com esse sentido', 409);
+        json_error('Já existe um conceito com esse sentido neste universo e país', 409);
     }
     $rotulo_ids = array_map('intval', is_array($body['rotulo_ids'] ?? null) ? $body['rotulo_ids'] : []);
     $prop_ids   = array_map('intval', is_array($body['proposicao_ids'] ?? null) ? $body['proposicao_ids'] : []);
@@ -601,7 +715,8 @@ function conceito_split(array $auth, int $id): void
 
     $pdo->beginTransaction();
     try {
-        $pdo->prepare("INSERT INTO conceito (sentido) VALUES (?)")->execute([$sentido]);
+        $pdo->prepare("INSERT INTO conceito (sentido, universo_id, pais) VALUES (?, ?, ?)")
+            ->execute([$sentido, $uid, $pais_orig]);
         $novo = (int) $pdo->lastInsertId();
 
         foreach ($rotulo_ids as $rid) {
@@ -643,7 +758,7 @@ function conceito_split(array $auth, int $id): void
             $pdo->prepare("UPDATE proposicao SET conceito_destino = ? WHERE id = ? AND conceito_destino = ?")
                 ->execute([$novo, $pid, $id]);
         }
-        $fonte_id = kdd_fonte_curadoria($pdo, (string) ($auth['descricao'] ?? ''));
+        $fonte_id = kdd_fonte_curadoria($pdo, (string) ($auth['descricao'] ?? ''), $uid);
         $pdo->prepare("INSERT IGNORE INTO conceito_fonte (conceito_id, fonte_id) VALUES (?, ?)")->execute([$novo, $fonte_id]);
 
         kdd_log_changeset($pdo, $auth, 'split_conceito', 'conceito', $id,
@@ -669,20 +784,29 @@ function area_criar(array $auth): void
     $body = json_body();
     $nome = trim((string) ($body['nome'] ?? ''));
     $parent = isset($body['parent_id']) ? (int) $body['parent_id'] : null;
+    $uid  = kdd_universo_req($pdo, $body['universo'] ?? null);
     if ($nome === '') {
         json_error('Informe o nome da área', 400);
     }
     if ($parent !== null) {
-        $c = $pdo->prepare("SELECT id FROM area WHERE id = ?");
+        // A hierarquia de áreas não cruza universo: a mãe tem que ser do mesmo.
+        $c = $pdo->prepare("SELECT id, universo_id FROM area WHERE id = ?");
         $c->execute([$parent]);
-        if (!$c->fetch()) {
+        $pai = $c->fetch();
+        if (!$pai) {
             json_error('Área-pai não encontrada', 404);
         }
+        if ((int) $pai['universo_id'] !== $uid) {
+            json_error('A área-pai está em outro universo', 409);
+        }
     }
-    $pdo->prepare("INSERT INTO area (nome, parent_id) VALUES (?, ?)")->execute([$nome, $parent]);
+    $pdo->prepare("INSERT INTO area (nome, parent_id, universo_id) VALUES (?, ?, ?)")
+        ->execute([$nome, $parent, $uid]);
     $aid = (int) $pdo->lastInsertId();
-    kdd_log_changeset($pdo, $auth, 'criar_area', 'area', $aid, null, ['nome' => $nome, 'parent_id' => $parent]);
-    json_out(['ok' => true, 'area' => ['id' => $aid, 'nome' => $nome, 'parent_id' => $parent]], 201);
+    kdd_log_changeset($pdo, $auth, 'criar_area', 'area', $aid, null,
+        ['nome' => $nome, 'parent_id' => $parent, 'universo_id' => $uid]);
+    json_out(['ok' => true, 'area' => ['id' => $aid, 'nome' => $nome, 'parent_id' => $parent,
+                                       'universo' => kdd_universo_resumo($pdo, $uid)]], 201);
 }
 
 /** PATCH /areas/{id}  { nome?, parent_id? }  (valida ciclo) */
